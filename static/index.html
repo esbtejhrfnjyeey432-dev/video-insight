@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VideoInsight · 视频解析工具</title>
+<style>
+  :root{
+    --blue:#185FA5; --blue-l:#E6F1FB; --blue-d:#0C447C;
+    --teal:#0F6E56; --teal-l:#E1F5EE; --teal-d:#085041;
+    --amber:#854F0B; --amber-l:#FAEEDA;
+    --text:#1f2328; --muted:#6a737d; --line:#e4e7ec; --bg:#f6f8fa;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20}
+  .logo{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700}
+  .logo .dot{width:12px;height:12px;border-radius:3px;background:var(--blue);display:inline-block}
+  .logo small{font-weight:400;color:var(--muted);font-size:13px;margin-left:2px}
+  .btns{display:flex;gap:10px}
+  button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:14px;padding:8px 16px;border:1px solid var(--line);background:#fff;color:var(--text);transition:all .15s}
+  button:hover{border-color:var(--blue);color:var(--blue)}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:500}
+  button.primary:hover{background:var(--blue-d);color:#fff}
+  button.primary:disabled{background:#9db8d4;border-color:#9db8d4;cursor:not-allowed}
+  main{max-width:860px;margin:0 auto;padding:24px 16px 60px}
+  .banner{background:var(--amber-l);border:1px solid #ecd9ae;color:var(--amber);border-radius:10px;padding:10px 16px;font-size:14px;margin-bottom:16px;display:none}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px;margin-bottom:16px}
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tab{padding:7px 18px;border-radius:999px;border:1px solid var(--line);font-size:14px;background:#fff;cursor:pointer}
+  .tab.active{background:var(--blue-l);border-color:var(--blue);color:var(--blue-d);font-weight:500}
+  .drop{border:2px dashed #c6ceda;border-radius:12px;padding:36px 20px;text-align:center;color:var(--muted);cursor:pointer;transition:all .15s}
+  .drop:hover,.drop.over{border-color:var(--blue);background:var(--blue-l)}
+  .drop b{color:var(--text)}
+  .drop .hint{font-size:13px;margin-top:6px}
+  .urlrow{display:none;gap:10px}
+  .urlrow input{flex:1;padding:10px 14px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit}
+  .urlrow input:focus{outline:none;border-color:var(--blue)}
+  input:focus{outline:none;border-color:var(--blue)}
+  .actions{margin-top:16px;display:flex;align-items:center;gap:12px}
+  .actions .tip{font-size:13px;color:var(--muted)}
+  .progress{display:none;margin-top:18px}
+  .bar{height:8px;background:#eef1f5;border-radius:99px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--blue);border-radius:99px;transition:width .5s}
+  .ptext{font-size:13px;color:var(--muted);margin-top:8px}
+  .sec-title{font-size:15px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .sec-title .tag{font-size:12px;font-weight:400;background:var(--teal-l);color:var(--teal-d);border-radius:6px;padding:1px 8px}
+  #result{display:none}
+  .head-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
+  .chip{background:var(--blue-l);color:var(--blue-d);border-radius:6px;padding:2px 10px;font-size:13px}
+  .tagchip{background:#f0f2f5;color:var(--muted);border-radius:6px;padding:2px 10px;font-size:12px}
+  .summary{color:var(--text);font-size:14px}
+  .meta{font-size:12px;color:var(--muted);margin-top:12px}
+  .timeline{list-style:none}
+  .timeline li{display:flex;gap:12px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:14px}
+  .timeline li:last-child{border-bottom:none}
+  .t{color:var(--blue);font-weight:600;min-width:52px;font-variant-numeric:tabular-nums}
+  ol.keyinfo{list-style:none;counter-reset:ki}
+  ol.keyinfo li{position:relative;padding:8px 0 8px 44px;font-size:14px;border-bottom:1px dashed var(--line);counter-increment:ki}
+  ol.keyinfo li:last-child{border-bottom:none}
+  ol.keyinfo li::before{content:counter(ki);position:absolute;left:0;top:8px;width:26px;height:26px;border-radius:8px;background:var(--blue-l);color:var(--blue-d);font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
+  ol.keyinfo li:first-child::before{background:var(--blue);color:#fff}
+  .final{background:linear-gradient(135deg,#F2F8FE,#E6F1FB);border-color:#c9dff5}
+  .final .sec-title{color:var(--blue-d)}
+  .overall{font-size:14.5px;line-height:1.85}
+  .teach{border-left:4px solid var(--teal)}
+  .teach .sec-title{color:var(--teal-d)}
+  .viewpoint{background:var(--teal-l);border-radius:8px;padding:8px 12px;font-size:14px;margin-bottom:8px}
+  .kv{font-size:14px;margin-top:4px}
+  .kv b{color:var(--teal-d)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  .rcard{border:1px solid var(--line);border-radius:10px;padding:14px}
+  .rcard h4{font-size:14px;color:var(--blue-d);margin-bottom:6px}
+  .rcard p{font-size:13px;color:var(--muted)}
+  .script{white-space:pre-wrap;background:#f8f9fb;border:1px solid var(--line);border-radius:10px;padding:14px;font-size:14px}
+  .clips li{display:flex;gap:10px;font-size:14px;padding:6px 0;border-bottom:1px dashed var(--line);list-style:none}
+  .clips li:last-child{border:none}
+  .quotes li{list-style:none;font-size:14px;padding:5px 0 5px 20px;position:relative;color:var(--teal-d)}
+  .quotes li::before{content:"「";position:absolute;left:0;top:5px;color:var(--teal)}
+  .err{background:#FCEBEB;border:1px solid #F09595;color:#A32D2D;border-radius:10px;padding:12px 16px;font-size:14px;margin-top:14px;display:none}
+  .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:50;align-items:center;justify-content:center}
+  .modal{background:#fff;border-radius:14px;padding:26px;width:92%;max-width:440px}
+  .modal h3{font-size:16px;margin-bottom:14px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+  .field input,.field select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit}
+  .note{font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 12px;margin-bottom:14px}
+  .modal .btns{justify-content:flex-end;display:flex;gap:10px;margin-top:6px}
+  .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:10px 22px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:99}
+  .toast.show{opacity:.95}
+  .gate{display:none;position:fixed;inset:0;background:rgba(246,248,249,.97);z-index:80;align-items:center;justify-content:center}
+  .gate .gcard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:30px;width:92%;max-width:380px;text-align:center;box-shadow:0 8px 30px rgba(31,35,40,.08)}
+  .gate .gcard .glogo{font-weight:700;font-size:18px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:8px}
+  .gate .gcard p{font-size:13px;color:var(--muted);margin-bottom:18px}
+  .gate input{width:100%;padding:10px 14px;border:1px solid var(--line);border-radius:8px;font-size:14px;margin-bottom:12px;font-family:inherit}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:10px 0 30px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><span class="dot"></span>VideoInsight <small>视频解析 · 关键信息提取 / 总体总结 / Remix</small></div>
+  <div class="btns">
+    <button id="btnDemo">演示模式</button>
+    <button id="btnSetting">设置</button>
+  </div>
+</header>
+
+<main>
+  <div class="banner" id="noKeyBanner">还没有配置 API Key：可以先点右上角「演示模式」看完整效果；要分析自己的视频，请在「设置」里填入阿里百炼 API Key。</div>
+
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" data-tab="upload">上传视频</div>
+      <div class="tab" data-tab="url">视频链接</div>
+    </div>
+    <div class="drop" id="drop">
+      <b>点击选择视频文件</b> 或把视频拖拽到这里
+      <div class="hint">支持 mp4 / mov / webm 等常见格式，最大 500MB；文件只在本机解析，不会存到云端</div>
+      <input type="file" id="fileInput" accept="video/*" hidden>
+    </div>
+    <div class="urlrow" id="urlRow">
+      <input type="text" id="urlInput" placeholder="粘贴任意视频链接或分享文案：B站 / 抖音 / 小红书 / 微博 / 西瓜 / YouTube 等 1000+ 平台">
+    </div>
+    <div id="urlHint" style="display:none;font-size:13px;color:var(--muted);margin-top:8px">
+      支持平台：B 站 · 微博 · 西瓜 · YouTube · 抖音 · 小红书 等 1000+ 网站。手机 App 里点「<b>分享 → 复制链接</b>」，把<b>整段文字</b>直接粘贴进来即可，系统自动提取链接。<br>遇到平台风控解析失败时，下载视频后用上方「上传文件」一定可以解析。
+    </div>
+    <div class="actions">
+      <button class="primary" id="btnGo">开始解析</button>
+      <span class="tip" id="fileTip"></span>
+    </div>
+    <div class="progress" id="progress">
+      <div class="bar"><i id="barFill"></i></div>
+      <div class="ptext" id="ptext">准备中…</div>
+    </div>
+    <div class="err" id="errBox"></div>
+  </div>
+
+  <div id="result">
+    <div class="card">
+      <div class="head-row" id="headRow"></div>
+      <div class="meta" id="meta"></div>
+    </div>
+    <div class="card">
+      <div class="sec-title">关键信息提取 <span class="tag">按重要性排序</span></div>
+      <ol class="keyinfo" id="keyInfo"></ol>
+    </div>
+    <div class="card">
+      <div class="sec-title">章节时间轴</div>
+      <ul class="timeline" id="chapters"></ul>
+    </div>
+    <div class="card teach" id="teachCard">
+      <div class="sec-title">教学观点提炼 <span class="tag">教育视频专属</span></div>
+      <div id="viewpoints"></div>
+      <div class="kv" id="logic"></div>
+      <div class="kv" id="audience"></div>
+    </div>
+    <div class="card">
+      <div class="sec-title">Remix 衍生创作 <span class="tag">二次创作素材</span></div>
+      <div class="cards" id="rcards" style="margin-bottom:16px"></div>
+      <div class="sec-title" style="font-size:14px">60 秒短视频口播脚本</div>
+      <div class="script" id="script"></div>
+      <div class="sec-title" style="font-size:14px;margin-top:16px">精华剪辑点建议</div>
+      <ul class="clips" id="clips"></ul>
+      <div class="sec-title" style="font-size:14px;margin-top:16px">金句摘录</div>
+      <ul class="quotes" id="quotes"></ul>
+    </div>
+    <div class="card final">
+      <div class="sec-title">总体总结 <span class="tag">全片综合</span></div>
+      <div class="overall" id="overallSummary"></div>
+    </div>
+    <div class="card" style="text-align:center">
+      <button id="btnExport">导出 Markdown 报告</button>
+    </div>
+  </div>
+
+  <footer>VideoInsight · 抽帧 + 多模态大模型内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作</footer>
+</main>
+
+<div class="modal-mask" id="mask">
+  <div class="modal">
+    <h3>设置</h3>
+    <div class="note">API Key 只保存在你电脑本地的 config.json 中，分析时由本机程序直接调用阿里百炼，不会经过其他服务器。</div>
+    <div class="field">
+      <label>阿里百炼 API Key（在百炼控制台「API-KEY 管理」中创建）</label>
+      <input type="password" id="keyInput" placeholder="sk-xxxxxxxx">
+    </div>
+    <div class="field">
+      <label>视频理解模型</label>
+      <select id="modelSelect"></select>
+    </div>
+    <div class="btns">
+      <button id="btnCancel">取消</button>
+      <button class="primary" id="btnSave">保存</button>
+    </div>
+  </div>
+</div>
+<div class="gate" id="gate">
+  <div class="gcard">
+    <div class="glogo"><span class="dot" style="width:12px;height:12px;border-radius:3px;background:var(--blue);display:inline-block"></span>VideoInsight</div>
+    <p>本工具已开启访问保护<br>请输入访问码后使用（详情请咨询分享者）</p>
+    <input type="password" id="codeInput" placeholder="请输入访问码" onkeydown="if(event.key==='Enter')document.getElementById('btnCode').click()">
+    <button class="primary" id="btnCode" style="width:100%">进入工具</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var $ = function(id){ return document.getElementById(id); };
+var currentFile = null, currentTab = "upload", lastResult = null, timer = null;
+var accessCode = localStorage.getItem("vi_code") || "";
+
+/* 带访问码的统一请求封装 */
+function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {}, { "X-Access-Code": accessCode });
+  return fetch(path, opts);
+}
+function showGate(){ $("gate").style.display = "flex"; }
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function toast(msg){
+  var t = $("toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(function(){ t.classList.remove("show"); }, 2600);
+}
+function showErr(msg){ var e = $("errBox"); e.textContent = msg; e.style.display = "block"; }
+function hideErr(){ $("errBox").style.display = "none"; }
+
+/* 初始化 */
+fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
+  window.APP_STATUS = s;
+  s.models.forEach(function(m){
+    var o = document.createElement("option"); o.value = m; o.textContent = m;
+    if(m === s.model) o.selected = true;
+    $("modelSelect").appendChild(o);
+  });
+  if(s.deploy_mode){
+    /* 公开部署版：AI 已由作者在服务端配置好，隐藏设置入口 */
+    $("btnSetting").style.display = "none";
+  } else if(!s.has_key){
+    $("noKeyBanner").style.display = "block";
+  }
+  if(s.need_code && !accessCode) showGate();
+}).catch(function(){});
+
+/* 访问码进入 */
+$("btnCode").onclick = function(){
+  var c = $("codeInput").value.trim();
+  if(!c){ toast("请输入访问码"); return; }
+  var saved = accessCode; accessCode = c;
+  api("/api/analyze-demo").then(function(r){
+    if(r.status === 401){
+      accessCode = saved;
+      toast("访问码不正确，请重新输入");
+      return;
+    }
+    localStorage.setItem("vi_code", c);
+    $("gate").style.display = "none";
+    toast("已进入，开始体验吧");
+  }).catch(function(){ accessCode = saved; toast("网络错误，请重试"); });
+};
+if(accessCode){
+  /* 已有访问码：静默校验一次，失败则重新显示输入 */
+  api("/api/analyze-demo").then(function(r){ if(r.status === 401) showGate(); }).catch(function(){});
+}
+
+/* Tab 切换 */
+document.querySelectorAll(".tab").forEach(function(tab){
+  tab.onclick = function(){
+    document.querySelectorAll(".tab").forEach(function(t){ t.classList.remove("active"); });
+    tab.classList.add("active");
+    currentTab = tab.dataset.tab;
+    $("drop").style.display = currentTab === "upload" ? "block" : "none";
+    $("urlRow").style.display = currentTab === "url" ? "flex" : "none";
+    $("urlHint").style.display = currentTab === "url" ? "block" : "none";
+  };
+});
+
+/* 拖拽上传 */
+$("drop").onclick = function(){ $("fileInput").click(); };
+$("fileInput").onchange = function(){ if(this.files[0]) setFile(this.files[0]); };
+$("drop").ondragover = function(e){ e.preventDefault(); this.classList.add("over"); };
+$("drop").ondragleave = function(){ this.classList.remove("over"); };
+$("drop").ondrop = function(e){
+  e.preventDefault(); this.classList.remove("over");
+  if(e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+};
+function setFile(f){
+  currentFile = f;
+  $("fileTip").textContent = "已选择：" + f.name + "（" + (f.size/1024/1024).toFixed(1) + " MB）";
+}
+
+/* 进度动画 */
+function startProgress(){
+  var steps = [
+    [8,  "正在读取视频…"],
+    [22, "抽取关键帧画面…"],
+    [45, "AI 正在理解视频内容…"],
+    [72, "正在提取关键信息与组织内容…"],
+    [90, "生成总体总结，整理报告…"]
+  ];
+  var i = 0;
+  $("progress").style.display = "block";
+  $("barFill").style.width = "5%";
+  $("ptext").textContent = steps[0][1];
+  timer = setInterval(function(){
+    if(i < steps.length - 1){ i++; $("barFill").style.width = steps[i][0] + "%"; $("ptext").textContent = steps[i][1]; }
+  }, 6000);
+}
+function stopProgress(ok){
+  clearInterval(timer);
+  $("barFill").style.width = "100%";
+  setTimeout(function(){ $("progress").style.display = "none"; }, ok ? 400 : 0);
+  if(!ok) $("barFill").style.width = "0%";
+}
+
+/* 开始解析 */
+$("btnGo").onclick = function(){
+  hideErr();
+  var fd = new FormData();
+  if(currentTab === "upload"){
+    if(!currentFile){ toast("请先选择一个视频文件"); return; }
+    fd.append("file", currentFile);
+  } else {
+    var u = $("urlInput").value.trim();
+    if(!u){ toast("请先粘贴视频链接"); return; }
+    fd.append("url", u);
+  }
+  $("btnGo").disabled = true;
+  startProgress();
+  api("/api/analyze", { method:"POST", body: fd })
+    .then(function(r){
+      if(r.status === 401){ stopProgress(false); $("btnGo").disabled = false; showGate(); return Promise.reject(new Error("stop")); }
+      return r.json().then(function(j){ return { ok: r.ok, j: j }; });
+    })
+    .then(function(res){
+      stopProgress(res.ok);
+      $("btnGo").disabled = false;
+      if(!res.ok){ showErr(res.j.detail || "解析失败，请重试"); return; }
+      lastResult = res.j;
+      render(res.j);
+      toast("解析完成");
+    })
+    .catch(function(e){
+      stopProgress(false); $("btnGo").disabled = false;
+      if(e && e.message !== "stop") showErr("网络错误：" + e.message);
+    });
+};
+
+/* 演示模式 */
+$("btnDemo").onclick = function(){
+  hideErr();
+  $("btnDemo").disabled = true;
+  startProgress();
+  api("/api/analyze-demo")
+    .then(function(r){
+      if(r.status === 401){ stopProgress(false); $("btnDemo").disabled = false; showGate(); return Promise.reject(new Error("stop")); }
+      return r.json();
+    })
+    .then(function(j){
+      stopProgress(true);
+      $("btnDemo").disabled = false;
+      lastResult = j;
+      render(j);
+      toast("演示模式：这是内置示例视频的分析结果");
+    })
+    .catch(function(e){ stopProgress(false); $("btnDemo").disabled = false; showErr(e.message); });
+};
+
+/* 渲染结果 */
+function render(a){
+  $("result").style.display = "block";
+  var head = '<span style="font-size:17px;font-weight:700">' + esc(a.title) + "</span>";
+  if(a.category) head += '<span class="chip">' + esc(a.category) + "</span>";
+  $("headRow").innerHTML = head;
+  var tags = (a.tags || []).map(function(t){ return '<span class="tagchip">' + esc(t) + "</span>"; }).join(" ");
+  var meta = (a._meta || {});
+  var t = meta.title ? " · 《" + esc(meta.title.length > 24 ? meta.title.slice(0, 24) + "…" : meta.title) + "》" : "";
+  $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 关键帧 " + (meta.frames || "-") + " 张 · 视频约 " + (meta.duration || 0) + " 秒 · 模型：" + esc(meta.model || "");
+  $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return "<li>" + esc(p) + "</li>"; }).join("");
+  $("chapters").innerHTML = (a.chapters || []).map(function(c){
+    return '<li><span class="t">' + esc(c.time) + "</span><span>" + esc(c.label) + "</span></li>";
+  }).join("") || '<li><span>无</span></li>';
+
+  var t = a.teaching || {};
+  if(t.is_teaching){
+    $("teachCard").style.display = "block";
+    $("viewpoints").innerHTML = (t.viewpoints || []).map(function(v){ return '<div class="viewpoint">' + esc(v) + "</div>"; }).join("");
+    $("logic").innerHTML = "<b>讲解思路：</b>" + esc(t.logic || "");
+    $("audience").innerHTML = "<b>适合人群：</b>" + esc(t.audience || "");
+  } else {
+    $("teachCard").style.display = "none";
+  }
+
+  var r = a.remix || {};
+  $("rcards").innerHTML = (r.cards || []).map(function(c){
+    return '<div class="rcard"><h4>' + esc(c.title) + "</h4><p>" + esc(c.desc) + "</p></div>";
+  }).join("");
+  $("script").textContent = r.script || "";
+  $("clips").innerHTML = (r.clips || []).map(function(c){
+    return '<li><span class="t">' + esc(c.time) + "</span><span>" + esc(c.reason) + "</span></li>";
+  }).join("");
+  $("quotes").innerHTML = (r.quotes || []).map(function(q){ return "<li>" + esc(q) + "</li>"; }).join("");
+
+  $("overallSummary").textContent = a.overall_summary || "";
+
+  $("result").scrollIntoView({ behavior: "smooth" });
+}
+
+/* 导出 Markdown */
+$("btnExport").onclick = function(){
+  if(!lastResult){ toast("请先完成一次解析"); return; }
+  var a = lastResult, md = [];
+  md.push("# " + (a.title || "视频分析报告") + "\n");
+  md.push("- 类型：" + (a.category || "-"));
+  md.push("- 标签：" + (a.tags || []).join("、"));
+  md.push("- 来源：" + (((a._meta||{}).platform) || "本地文件"));
+  md.push("- 时长：约 " + ((a._meta||{}).duration || 0) + " 秒\n");
+  md.push("## 关键信息提取\n");
+  (a.key_info || []).forEach(function(p, i){ md.push((i+1) + ". " + p); });
+  md.push("\n## 章节时间轴");
+  (a.chapters || []).forEach(function(c){ md.push("- " + c.time + " " + c.label); });
+  var t = a.teaching || {};
+  if(t.is_teaching){
+    md.push("\n## 教学观点提炼");
+    (t.viewpoints || []).forEach(function(v){ md.push("- " + v); });
+    md.push("\n**讲解思路：**" + (t.logic || ""));
+    md.push("\n**适合人群：**" + (t.audience || ""));
+  }
+  var r = a.remix || {};
+  md.push("\n## Remix 衍生创作");
+  (r.cards || []).forEach(function(c){ md.push("- **" + c.title + "**：" + c.desc); });
+  md.push("\n### 60 秒口播脚本\n" + (r.script || ""));
+  md.push("\n### 精华剪辑点");
+  (r.clips || []).forEach(function(c){ md.push("- " + c.time + "：" + c.reason); });
+  md.push("\n### 金句摘录");
+  (r.quotes || []).forEach(function(q){ md.push("> " + q); });
+  if(a.overall_summary) md.push("\n## 总体总结\n" + a.overall_summary);
+  var blob = new Blob([md.join("\n")], { type: "text/markdown;charset=utf-8" });
+  var link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "video-analysis.md";
+  link.click();
+  URL.revokeObjectURL(link.href);
+};
+
+/* 设置弹窗 */
+$("btnSetting").onclick = function(){ $("mask").style.display = "flex"; };
+$("btnCancel").onclick = function(){ $("mask").style.display = "none"; };
+$("mask").onclick = function(e){ if(e.target === this) this.style.display = "none"; };
+$("btnSave").onclick = function(){
+  var fd = new FormData();
+  fd.append("api_key", $("keyInput").value.trim());
+  fd.append("model", $("modelSelect").value);
+  api("/api/config", { method:"POST", body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j.ok){
+        $("mask").style.display = "none";
+        $("noKeyBanner").style.display = "none";
+        $("keyInput").value = "";
+        toast("设置已保存");
+      } else if(j.detail){
+        toast(j.detail);
+      }
+    })
+    .catch(function(){ toast("保存失败，请重试"); });
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Render 部署配置（Blueprint）
+# 用法：GitHub 仓库连接 Render 后会自动读取本文件
+# 注意：VI_API_KEY / VI_ACCESS_CODE 的值不写在文件里（避免泄露），
+#       部署时在 Render 网页的 Environment 中填写
+services:
+  - type: web
+    name: video-insight
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/status
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: VI_API_KEY
+        sync: false          # 敏感值：部署时在 Render 网页填写
+      - key: VI_ACCESS_CODE
+        sync: false          # 访问码：部署时在 Render 网页填写
+      - key: VI_DAILY_LIMIT
+        value: "20"          # 每日最多解析 20 次，防止访问码外泄后被刷额度

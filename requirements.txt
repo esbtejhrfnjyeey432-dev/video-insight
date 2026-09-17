@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+pillow
+imageio-ffmpeg
+python-multipart
+yt-dlp
