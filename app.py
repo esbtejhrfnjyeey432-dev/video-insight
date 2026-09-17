@@ -41,8 +41,9 @@ _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外�
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-plus"
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
-MAX_FRAMES = 12
-FRAME_WIDTH = 768
+# 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 8 帧 / 640px）
+MAX_FRAMES = int(os.environ.get("VI_MAX_FRAMES", "12"))
+FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500MB
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
