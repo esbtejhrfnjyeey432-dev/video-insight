@@ -19,6 +19,7 @@ from pathlib import Path
 import requests
 import imageio_ffmpeg
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import resolver
@@ -26,7 +27,20 @@ import resolver
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 STATIC_DIR = BASE_DIR / "static"
-FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _pick_ffmpeg() -> str:
+    """按优先级挑选 ffmpeg：环境变量 → 系统 PATH → imageio-ffmpeg 内置二进制。"""
+    env_path = os.environ.get("VI_FFMPEG", "").strip()
+    if env_path and os.path.exists(env_path):
+        return env_path
+    which = shutil.which("ffmpeg")
+    if which:
+        return which
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+FFMPEG = _pick_ffmpeg()
 
 # ------------------------------------------------------------------
 # 隐私与访问控制（公网部署用环境变量注入，代码仓库中不含任何密钥）
@@ -78,6 +92,24 @@ PROMPT = """你是专业的视频内容分析师。我会给你一段视频中�
 若不是教学类视频，teaching.is_teaching 填 false，其余教学字段填空数组或空字符串。"""
 
 app = FastAPI(title="VideoInsight")
+
+# ------------------------------------------------------------------
+# 跨域（CORS）：前端页面与后端 API 部署在不同域名时必需。
+# 例如界面托管在 Vercel、后端跑在 Render/Koyeb，浏览器会拦截跨域请求。
+# 默认放行全部来源，方便直接把链接分享给任何人使用。
+# 需要收紧时用环境变量 VI_ALLOW_ORIGINS 指定白名单（多个用逗号分隔）。
+# ------------------------------------------------------------------
+_origins = os.environ.get("VI_ALLOW_ORIGINS", "").strip()
+ALLOW_ORIGINS = [o.strip() for o in _origins.split(",") if o.strip()] or ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOW_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=86400,
+)
 
 
 def load_config() -> dict:

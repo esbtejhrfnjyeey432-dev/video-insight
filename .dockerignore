@@ -1,0 +1,10 @@
+.git
+__pycache__
+*.pyc
+config.json
+demo-dist
+slides
+slides.txt
+sample_lesson.mp4
+test_resolver.py
+make_sample.py

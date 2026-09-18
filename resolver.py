@@ -28,6 +28,55 @@ MAX_VIDEO_BYTES = 500 * 1024 * 1024
 VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi", ".flv", ".ts")
 
 
+def _prepare_cookies(url: str, outdir: str):
+    """为云服务器环境准备浏览器 Cookie，显著降低视频平台风控（如 B站 412）概率。
+
+    数据中心 IP 直接请求常被 WAF 拦下；先访问站点首页拿到 buvid3 等前置
+    Cookie 后，再带着它去请求详情页通常就能通过。
+    若用户通过环境变量 VI_BILI_COOKIE 手动注入 Cookie，则优先使用
+    （可解锁会员 / 更高清晰度内容）。
+    返回 cookiefile 路径；拿不到 Cookie 时返回 None，yt-dlp 仍会无 Cookie 重试。
+    """
+    host = urlparse(url).netloc.lower()
+    if "bilibili" not in host:
+        return None
+
+    jar: dict = {}
+    manual = os.environ.get("VI_BILI_COOKIE", "").strip()
+    if manual:
+        for part in manual.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                jar[k.strip()] = v.strip()
+
+    if not jar:
+        try:
+            sess = requests.Session()
+            sess.headers.update({
+                "User-Agent": DESKTOP_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Referer": "https://www.bilibili.com/",
+                "Origin": "https://www.bilibili.com",
+            })
+            sess.get("https://www.bilibili.com/", timeout=20)
+            for k, v in sess.cookies.get_dict().items():
+                jar[k] = v
+        except Exception:
+            return None
+
+    if not jar:
+        return None
+
+    path = os.path.join(outdir, "cookies.txt")
+    lines = ["# Netscape HTTP Cookie File"]
+    for k, v in jar.items():
+        lines.append(f".bilibili.com\tTRUE\t/\tFALSE\t0\t{k}\t{v}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+
 class ResolveError(Exception):
     """面向用户的可读错误（中文提示）"""
 
@@ -198,6 +247,9 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": f"https://{host}/",
     }
+    if "bilibili" in host:
+        # B站会校验来源，缺 Origin 时数据中心 IP 更容易被判定为爬虫
+        anti_headers["Origin"] = "https://www.bilibili.com"
     opts = {
         "outtmpl": prefix + ".%(ext)s",
         # 先取 720p 以下的单文件格式，取不到再合并音视频（需要 ffmpeg）
@@ -219,6 +271,11 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
         # 注意：必须传 ffmpeg 可执行文件的完整路径，imageio-ffmpeg 的文件名
         # 不叫 ffmpeg.exe，传目录会导致 yt-dlp 找不到而合并失败
         opts["ffmpeg_location"] = ffmpeg_path
+
+    # 先拿站点 Cookie 再请求，能绕开大部分云服务器 IP 的风控拦截（B站 412 等）
+    cookiefile = _prepare_cookies(url, outdir)
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     title = ""
     try:

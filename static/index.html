@@ -205,6 +205,21 @@
 <div class="toast" id="toast"></div>
 
 <script>
+/* 后端 API 地址。
+   默认空值 = 同源部署（后端自带页面，最常见）。
+   前后端分离时用 <script>window.VI_API_BASE="https://后端域名"</script> 指定，
+   也可以用 ?api=https://后端域名 临时覆盖，方便调试切换后端。 */
+var API_BASE = (function(){
+  try{
+    var q = location.search.match(/api=([^&]+)/);
+    if(q) return decodeURIComponent(q[1]).replace(/\/+$/, "");
+    var w = window.VI_API_BASE;
+    if(typeof w === "string" && /^https?:\/\//.test(w)) return w.replace(/\/+$/, "");
+  }catch(e){}
+  return "";
+})();
+</script>
+<script>
 var $ = function(id){ return document.getElementById(id); };
 var currentFile = null, currentTab = "upload", lastResult = null, timer = null;
 var accessCode = localStorage.getItem("vi_code") || "";
@@ -213,7 +228,15 @@ var accessCode = localStorage.getItem("vi_code") || "";
 function api(path, opts){
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers || {}, { "X-Access-Code": accessCode });
-  return fetch(path, opts);
+  return fetch(API_BASE + path, opts);
+}
+/* 带超时的请求（免费云实例休眠时首次请求会挂很久，需要超时+重试而不是傻等） */
+function fetchWithTimeout(url, opts, ms){
+  if(!window.AbortController) return fetch(url, opts);
+  var ac = new AbortController(), id = setTimeout(function(){ ac.abort(); }, ms);
+  opts = Object.assign({}, opts || {}, { signal: ac.signal });
+  return fetch(url, opts).then(function(r){ clearTimeout(id); return r; },
+                               function(e){ clearTimeout(id); throw e; });
 }
 function showGate(){ $("gate").style.display = "flex"; }
 
@@ -225,8 +248,10 @@ function toast(msg){
 function showErr(msg){ var e = $("errBox"); e.textContent = msg; e.style.display = "block"; }
 function hideErr(){ $("errBox").style.display = "none"; }
 
-/* 初始化 */
-fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
+/* 初始化：免费实例会休眠，首次请求时后台正在唤醒服务 → 超时后自动重试 */
+function loadStatus(attempt){
+  attempt = attempt || 0;
+  fetchWithTimeout(API_BASE + "/api/status", {}, 30000).then(function(r){ return r.json(); }).then(function(s){
   window.APP_STATUS = s;
   s.models.forEach(function(m){
     var o = document.createElement("option"); o.value = m; o.textContent = m;
@@ -240,7 +265,12 @@ fetch("/api/status").then(function(r){ return r.json(); }).then(function(s){
     $("noKeyBanner").style.display = "block";
   }
   if(s.need_code && !accessCode) showGate();
-}).catch(function(){});
+  }).catch(function(){
+    /* 多半是免费实例正在冷启动，稍后自动重试几次即可 */
+    if(attempt < 3) setTimeout(function(){ loadStatus(attempt + 1); }, 3000);
+  });
+}
+loadStatus();
 
 /* 访问码进入 */
 $("btnCode").onclick = function(){
