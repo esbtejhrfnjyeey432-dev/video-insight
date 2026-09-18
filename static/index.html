@@ -120,11 +120,15 @@
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
-      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 腾讯视频 / YouTube 等">
+      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音">
     </div>
     <div id="urlHint" style="display:none;font-size:13px;color:var(--muted);margin-top:8px">
       手机 App 里点「<b>分享 → 复制链接</b>」，把<b>整段文字</b>直接粘贴进来即可，系统自动提取链接。<br>
-      说明：云端服务器解析链接时，部分平台（YouTube、Vimeo、腾讯视频等）会因数据中心 IP 风控或登录限制失败，属正常现象；<b>解析失败时把视频下载到本地，再用「上传视频」一定可以解析</b>。
+      <b>实测支持情况：</b>
+      <span style="color:#2b8a3e">B站 ✅</span>（稳定）、
+      <span style="color:#2b8a3e">抖音 ✅</span>（须是<b>视频作品</b>的分享链接，用户主页/直播间链接不行）；
+      <span style="color:#c92a2a">小红书 ❌</span>（网页版要求登录态，服务器无法读取，请用上方「上传视频」）。<br>
+      链接解析受平台风控影响，失败时把视频保存到本地再用「上传视频」，一定可以解析。
     </div>
     <div class="actions">
       <button class="primary" id="btnGo">开始解析</button>

@@ -533,7 +533,9 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None):
                 return "小红书", title, path
             except ResolveError:
                 raise ResolveError(
-                    f"{exc}。小红书近期风控较严，最稳妥的方式：保存视频到本地，再用「上传文件」解析"
+                    "小红书网页版现在要求登录态才会返回笔记内容，服务器无法自动解析链接"
+                    "（自研解析与 yt-dlp 两条路都试过）。"
+                    "请在小红书 App 里把视频保存到本地，再用「上传视频」解析——这条路一定能用"
                 )
 
     # 2.5 Vimeo：自研播放器解析 → yt-dlp 兜底
