@@ -594,6 +594,19 @@ def probe_url(url: str) -> dict:
 
     host = urlparse(url).netloc.lower()
 
+    # 短链先跟随重定向，把落地 URL 回传 —— 「无法识别视频」多半是落地 URL 变了
+    if "v.douyin.com" in host or "xhslink.com" in host:
+        try:
+            rr = requests.get(url, allow_redirects=True, timeout=25,
+                              headers={"User-Agent": MOBILE_UA})
+            out["short_redirect"] = rr.url
+            out["redirect_status"] = rr.status_code
+            out["redirect_len"] = len(rr.text)
+        except Exception as e:
+            out["short_redirect"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
+    elif "douyin" in host or "iesdouyin" in host:
+        pass
+
     if "xiaohongshu" in host or "xhslink" in host:
         m = (re.search(r"/explore/([0-9a-zA-Z]+)", url)
              or re.search(r"/discovery/item/([0-9a-zA-Z]+)", url))
@@ -619,9 +632,13 @@ def probe_url(url: str) -> dict:
             out["tries"].append(t)
 
     elif "douyin" in host or "iesdouyin" in host:
-        m = (re.search(r"/(?:video|note)/(\d+)", url) or re.search(r"/(\d{15,})", url))
+        src = out.get("short_redirect") or url
+        m = (re.search(r"/(?:video|note)/(\d+)", src)
+             or re.search(r"modal_id=(\d+)", src)
+             or re.search(r"/(\d{15,})", src))
         vid = m.group(1) if m else ""
         out["video_id"] = vid
+        out["video_id_src"] = "redirect" if out.get("short_redirect") else "url"
         for u in (f"https://www.iesdouyin.com/share/video/{vid}/",
                   f"https://www.douyin.com/video/{vid}"):
             for label, kw in (("requests", {}), ("curl_cffi", {"impersonate": "chrome"})):
