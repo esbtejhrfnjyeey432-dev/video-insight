@@ -4,6 +4,7 @@ VideoInsight 视频解析工具 · 后端服务
 流程：视频上传/链接下载 -> ffmpeg 抽关键帧 -> 阿里百炼 Qwen-VL 内容理解 -> 结构化分析 + Remix
 """
 import base64
+import glob
 import hashlib
 import hmac
 import json
@@ -31,6 +32,8 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 # 隐私与访问控制（公网部署用环境变量注入，代码仓库中不含任何密钥）
 #   VI_API_KEY     服务端持有的百炼 API Key（部署模式：前端永远看不到、也改不了）
 #   VI_ACCESS_CODE 访问码；设置后所有解析接口都需携带正确的码（发给招聘者的是「链接+访问码」）
+#   VI_PUBLIC      公开模式开关（默认 1 = 开启）。设为 1/true 时**不需要访问码**，
+#                  任何人打开链接即可直接使用；设为 0/false 时才启用 VI_ACCESS_CODE 保护。
 # ------------------------------------------------------------------
 ENV_API_KEY = os.environ.get("VI_API_KEY", "").strip()
 ACCESS_CODE = os.environ.get("VI_ACCESS_CODE", "").strip()
@@ -38,13 +41,24 @@ DEPLOY_MODE = bool(ENV_API_KEY)  # 服务端注入 Key 即视为公开部署模�
 DAILY_LIMIT = int(os.environ.get("VI_DAILY_LIMIT", "20"))  # 部署模式：每天最多解析次数
 _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外泄后被刷爆额度
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+# 公开模式：默认开启（分享链接给任何人都能直接用）。
+# 需要「仅授权人可用」时才在部署平台把 VI_PUBLIC 设为 false 并配置 VI_ACCESS_CODE。
+PUBLIC_MODE = _env_flag("VI_PUBLIC", True)
+
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-plus"
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
 # 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 8 帧 / 640px）
 MAX_FRAMES = int(os.environ.get("VI_MAX_FRAMES", "12"))
 FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
-MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500MB
+MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
@@ -80,17 +94,32 @@ def load_config() -> dict:
 
 
 async def require_code(x_access_code: str = Header(default="")):
-    """访问码校验：公网部署时防止链接被陌生人滥用额度"""
+    """访问码校验：公网部署时防止链接被陌生人滥用额度。
+
+    公开模式（VI_PUBLIC 开启，默认）下直接放行——任何人打开链接都能用，
+    额度由 DAILY_LIMIT 兜底保护。
+    """
+    if PUBLIC_MODE:
+        return
     if ACCESS_CODE and not hmac.compare_digest(str(x_access_code), ACCESS_CODE):
         raise HTTPException(401, "访问码不正确，请输入正确的访问码")
 
 
+async def optional_code(x_access_code: str = Header(default="")):
+    """带访问码会额外增加配额，不带码也能用（公开分享场景）。"""
+    return None
+
+
 def check_daily_usage():
     """部署模式下限制每日解析次数（本地自用不限），防止访问码泄露后被刷额度"""
-    if not (DEPLOY_MODE and ACCESS_CODE):
+    if not DEPLOY_MODE:
         return
     today = time.strftime("%Y-%m-%d")
-    rec = _usage.setdefault(ACCESS_CODE, [today, 0])
+    # Public deployments may deliberately omit an access code.  Keep a
+    # process-local quota in that case so one public link cannot consume an
+    # unlimited amount of the owner's model credit.
+    usage_key = ACCESS_CODE or "public"
+    rec = _usage.setdefault(usage_key, [today, 0])
     if rec[0] != today:
         rec[0], rec[1] = today, 0
     if rec[1] >= DAILY_LIMIT:
@@ -117,6 +146,53 @@ def get_duration(path: str):
         return None
 
 
+def _run_ffmpeg(cmd: list, timeout: int = 90):
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=timeout)
+    except Exception:
+        return False
+    return True
+
+
+def _extract_frames_batch(path: str, tmpdir: str, duration: float):
+    """一次 ffmpeg 调用抽完全部帧（serverless 环境下比逐帧调用快数倍）。
+
+    用 fps 滤镜按目标帧率均匀取样，配合 thumbnail 做代表帧筛选，
+    一次解码即可产出全部关键帧，避免 N 次 ffmpeg 冷启动开销。
+    """
+    pattern = os.path.join(tmpdir, "b%03d.jpg")
+    fps = max(MAX_FRAMES / max(duration, 0.5), 1 / max(duration, 0.5))
+    cmd = [
+        FFMPEG, "-y", "-loglevel", "error",
+        "-i", path,
+        "-vf", f"fps={fps:.6f},scale={FRAME_WIDTH}:-2,thumbnail={MAX_FRAMES}",
+        "-vsync", "0", "-frames:v", str(MAX_FRAMES), "-q:v", "5", pattern,
+    ]
+    if not _run_ffmpeg(cmd, timeout=min(int(duration) + 60, 120)):
+        return []
+    files = sorted(
+        f for f in glob.glob(os.path.join(tmpdir, "b*.jpg"))
+        if os.path.getsize(f) > 1000
+    )
+    return files[:MAX_FRAMES]
+
+
+def _extract_frames_serial(path: str, tmpdir: str, duration: float):
+    """逐帧抽取（兜底方案）：依赖 -ss 快速 seek，兼容性最好。"""
+    files = []
+    for i in range(MAX_FRAMES):
+        t = duration * (i + 0.5) / MAX_FRAMES
+        out = os.path.join(tmpdir, f"f{i}.jpg")
+        cmd = [
+            FFMPEG, "-y", "-loglevel", "error",
+            "-ss", f"{t:.2f}", "-i", path,
+            "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "5", out,
+        ]
+        if _run_ffmpeg(cmd, timeout=60) and os.path.exists(out) and os.path.getsize(out) > 1000:
+            files.append(out)
+    return files
+
+
 def extract_frames(path: str):
     """均匀抽取关键帧并转为 base64（静态画面自动去重，控制 token 消耗）"""
     duration = get_duration(path) or 0.0
@@ -125,25 +201,16 @@ def extract_frames(path: str):
     tmpdir = tempfile.mkdtemp(prefix="vinsight_frames_")
     frames, seen = [], set()
     try:
-        for i in range(MAX_FRAMES):
-            t = duration * (i + 0.5) / MAX_FRAMES
-            out = os.path.join(tmpdir, f"f{i}.jpg")
-            cmd = [
-                FFMPEG, "-y", "-loglevel", "error",
-                "-ss", f"{t:.2f}", "-i", path,
-                "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "5", out,
-            ]
-            try:
-                subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=60)
-            except Exception:
+        files = _extract_frames_batch(path, tmpdir, duration)
+        if len(files) < max(2, MAX_FRAMES // 2):
+            files = _extract_frames_serial(path, tmpdir, duration)
+        for f in files:
+            raw = Path(f).read_bytes()
+            digest = hashlib.md5(raw).hexdigest()
+            if digest in seen:
                 continue
-            if os.path.exists(out) and os.path.getsize(out) > 1000:
-                raw = Path(out).read_bytes()
-                digest = hashlib.md5(raw).hexdigest()
-                if digest in seen:
-                    continue
-                seen.add(digest)
-                frames.append("data:image/jpeg;base64," + base64.b64encode(raw).decode())
+            seen.add(digest)
+            frames.append("data:image/jpeg;base64," + base64.b64encode(raw).decode())
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return frames, duration
@@ -206,7 +273,10 @@ def status():
         "model": cfg.get("model") or DEFAULT_MODEL,
         "models": MODEL_OPTIONS,
         "deploy_mode": DEPLOY_MODE,
-        "need_code": bool(ACCESS_CODE),
+        "need_code": bool(ACCESS_CODE) and not PUBLIC_MODE,
+        "public_mode": PUBLIC_MODE,
+        "daily_limit": DAILY_LIMIT,
+        "max_frames": MAX_FRAMES,
     }
 
 
