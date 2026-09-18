@@ -267,6 +267,12 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
         "playlist_items": "1",
         "http_headers": anti_headers,
     }
+    # 数据中心 IP 常被 YouTube 用 web 客户端限流（HTTP 429）。改用 android/ios/tv
+    # 等移动端客户端取流，风控明显更松，能绕开绝大多数 429。
+    if "youtube" in host or "youtu.be" in host:
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["android", "ios", "tv_embedded", "web_embedded"]}
+        }
     if ffmpeg_path:
         # 注意：必须传 ffmpeg 可执行文件的完整路径，imageio-ffmpeg 的文件名
         # 不叫 ffmpeg.exe，传目录会导致 yt-dlp 找不到而合并失败

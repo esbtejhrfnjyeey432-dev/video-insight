@@ -386,6 +386,31 @@ async def analyze(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@app.post("/api/resolve-test")
+async def resolve_test(url: str = Form(...)):
+    """调试接口：只做「下载视频」这一步，不调用大模型，用于快速定位链接解析是否成功。
+    返回平台 / 标题 / 文件大小 / 视频时长 / 耗时。"""
+    tmpdir = tempfile.mkdtemp(prefix="vinsight_dbg_")
+    t0 = time.time()
+    try:
+        platform, title, vpath = resolver.download_video(url.strip(), tmpdir, FFMPEG)
+        size = os.path.getsize(vpath) if os.path.exists(vpath) else 0
+        dur = get_duration(vpath) if os.path.exists(vpath) else None
+        return {
+            "ok": True, "platform": platform, "title": (title or "")[:80],
+            "size_mb": round(size / 1024 / 1024, 2),
+            "duration": round(dur, 1) if dur else None,
+            "secs": round(time.time() - t0, 1),
+        }
+    except resolver.ResolveError as exc:
+        return {"ok": False, "error": str(exc), "secs": round(time.time() - t0, 1)}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200],
+                "secs": round(time.time() - t0, 1)}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 @app.get("/api/analyze-demo")
 def analyze_demo(_code: None = Depends(require_code)):
     """演示模式：无需 API Key，返回内置的示例分析结果"""
