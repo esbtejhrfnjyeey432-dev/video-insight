@@ -208,8 +208,9 @@
 <script>
 /* 后端 API 地址。
    默认空值 = 同源部署（后端自带页面，最常见）。
-   前后端分离时用 <script>window.VI_API_BASE="https://后端域名"</script> 指定，
-   也可以用 ?api=https://后端域名 临时覆盖，方便调试切换后端。 */
+   前后端分离时：在 head 里用 window.VI_API_BASE 变量指定后端域名，
+   也可以用 ?api=后端域名 参数临时覆盖，方便调试切换后端。
+   （注意：本注释里不能出现 HTML 标签字样，否则会提前终止脚本块） */
 var API_BASE = (function(){
   try{
     var q = location.search.match(/api=([^&]+)/);
