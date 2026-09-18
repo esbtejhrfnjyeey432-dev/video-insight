@@ -558,3 +558,84 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None):
     # 4. 通用平台：yt-dlp 引擎（1000+ 站点）
     title, path = resolve_ytdlp(url, outdir, ffmpeg_path)
     return "在线视频", title, path
+
+
+# ---------------------------------------------------------------- 远程诊断
+def probe_url(url: str) -> dict:
+    """诊断用：回传服务端实际抓到的页面结构，用于定位解析失败原因（不下载视频）。
+
+    抖音/小红书在本地网络常被风控、无法复现，只能看服务器视角的真实响应。
+    """
+    out = {"url": url, "tries": []}
+
+    def _fetch(u, headers=None, timeout=25, impersonate=None):
+        t = {"url": u}
+        try:
+            if impersonate:
+                from curl_cffi import requests as cr
+                r = cr.get(u, headers=headers, timeout=timeout, impersonate=impersonate)
+            else:
+                r = requests.get(u, headers=headers, timeout=timeout)
+            t.update(status=r.status_code, len=len(r.text))
+            t["head"] = re.sub(r"\s+", " ", r.text[:200])
+            return t, r.text
+        except Exception as e:
+            t.update(error=f"{type(e).__name__}: {str(e)[:140]}")
+            return t, ""
+
+    def _state_keys(text):
+        m = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>", text, re.S)
+        if not m:
+            return None
+        try:
+            return list(json.loads(m.group(1).replace("undefined", "null")).keys())
+        except Exception as e:
+            return f"json-err:{type(e).__name__}"
+
+    host = urlparse(url).netloc.lower()
+
+    if "xiaohongshu" in host or "xhslink" in host:
+        m = (re.search(r"/explore/([0-9a-zA-Z]+)", url)
+             or re.search(r"/discovery/item/([0-9a-zA-Z]+)", url))
+        nid = m.group(1) if m else ""
+        out["note_id"] = nid
+        page = f"https://www.xiaohongshu.com/explore/{nid}" if nid else url
+        for label, kw in (("requests", {}), ("curl_cffi", {"impersonate": "chrome"})):
+            t, body = _fetch(page, headers={"User-Agent": MOBILE_UA,
+                                            "Accept-Language": "zh-CN,zh;q=0.9"}, **kw)
+            t["via"] = label
+            t["state_keys"] = _state_keys(body)
+            if body and "__INITIAL_STATE__" in body:
+                try:
+                    m2 = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>", body, re.S)
+                    d = json.loads(m2.group(1).replace("undefined", "null"))
+                    nd = d.get("noteData") or {}
+                    t["noteData_keys"] = list(nd.keys())[:12]
+                    t["noteData_data_empty"] = not (nd.get("data") or {})
+                    t["old_noteDetailMap"] = list(
+                        (d.get("note", {}).get("noteDetailMap") or {}).keys())[:3]
+                except Exception as e:
+                    t["parse_err"] = f"{type(e).__name__}: {str(e)[:100]}"
+            out["tries"].append(t)
+
+    elif "douyin" in host or "iesdouyin" in host:
+        m = (re.search(r"/(?:video|note)/(\d+)", url) or re.search(r"/(\d{15,})", url))
+        vid = m.group(1) if m else ""
+        out["video_id"] = vid
+        for u in (f"https://www.iesdouyin.com/share/video/{vid}/",
+                  f"https://www.douyin.com/video/{vid}"):
+            for label, kw in (("requests", {}), ("curl_cffi", {"impersonate": "chrome"})):
+                t, body = _fetch(u, headers={"User-Agent": MOBILE_UA,
+                                             "Referer": "https://www.douyin.com/"}, **kw)
+                t["via"] = label
+                t["has_ROUTER_DATA"] = "_ROUTER_DATA" in body
+                t["has_RENDER_DATA"] = "RENDER_DATA" in body
+                t["has_videoInfo"] = "videoInfo" in body
+                out["tries"].append(t)
+    else:
+        t, body = _fetch(url, headers={"User-Agent": DESKTOP_UA})
+        t["via"] = "requests"
+        out["tries"].append(t)
+
+    out["has_curl_cffi"] = _has_curl_cffi()
+    return out

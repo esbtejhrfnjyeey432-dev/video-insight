@@ -411,6 +411,15 @@ async def resolve_test(url: str = Form(...)):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@app.post("/api/probe")
+async def probe(url: str = Form(...)):
+    """诊断接口：回传服务端实际抓到的页面结构，用于定位链接解析失败原因。不下载视频。"""
+    try:
+        return {"ok": True, **resolver.probe_url(url.strip())}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
+
+
 @app.get("/api/analyze-demo")
 def analyze_demo(_code: None = Depends(require_code)):
     """演示模式：无需 API Key，返回内置的示例分析结果"""
