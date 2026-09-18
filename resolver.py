@@ -190,6 +190,14 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
         raise ResolveError("服务器未安装 yt-dlp，无法解析该平台链接")
 
     prefix = os.path.join(outdir, "dl")
+    host = urlparse(url).netloc.lower()
+    # 反爬风控：云服务器 IP 常被视频平台标记，补齐浏览器请求头能显著提高成功率
+    anti_headers = {
+        "User-Agent": DESKTOP_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": f"https://{host}/",
+    }
     opts = {
         "outtmpl": prefix + ".%(ext)s",
         # 先取 720p 以下的单文件格式，取不到再合并音视频（需要 ffmpeg）
@@ -201,8 +209,11 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
         "noplaylist": True,
         "max_filesize": MAX_VIDEO_BYTES,
         "socket_timeout": 30,
-        "retries": 2,
+        "retries": 5,
+        "extractor_retries": 3,
+        "fragment_retries": 3,
         "playlist_items": "1",
+        "http_headers": anti_headers,
     }
     if ffmpeg_path:
         # 注意：必须传 ffmpeg 可执行文件的完整路径，imageio-ffmpeg 的文件名

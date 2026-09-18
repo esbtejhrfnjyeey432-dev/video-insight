@@ -157,8 +157,8 @@ def _run_ffmpeg(cmd: list, timeout: int = 90):
 def _extract_frames_batch(path: str, tmpdir: str, duration: float):
     """一次 ffmpeg 调用抽完全部帧（serverless 环境下比逐帧调用快数倍）。
 
-    用 fps 滤镜按目标帧率均匀取样，配合 thumbnail 做代表帧筛选，
-    一次解码即可产出全部关键帧，避免 N 次 ffmpeg 冷启动开销。
+    用 fps 滤镜按目标帧率均匀取样，一次解码即可产出全部关键帧，
+    避免 N 次 ffmpeg 冷启动开销（serverless 环境下这一步很贵）。
     """
     pattern = os.path.join(tmpdir, "b%03d.jpg")
     fps = max(MAX_FRAMES / max(duration, 0.5), 1 / max(duration, 0.5))

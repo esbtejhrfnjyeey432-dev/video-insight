@@ -1,21 +1,32 @@
 # Render 部署配置（Blueprint）
-# 用法：GitHub 仓库连接 Render 后会自动读取本文件
-# 注意：VI_API_KEY / VI_ACCESS_CODE 的值不写在文件里（避免泄露），
-#       部署时在 Render 网页的 Environment 中填写
+# 用法：打开下面的一键部署链接，Render 会自动读取本文件：
+# https://render.com/deploy?repo=https://github.com/esbtejhrfnjyeey432-dev/video-insight
+#
+# 注意：VI_API_KEY 的值不写在文件里（避免泄露），部署时在 Render 网页里填写。
 services:
   - type: web
     name: video-insight
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+    region: singapore            # 新加坡节点，访问国内视频平台延迟较低
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/status
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: "3.11.9"
       - key: VI_API_KEY
-        sync: false          # 敏感值：部署时在 Render 网页填写
-      - key: VI_ACCESS_CODE
-        sync: false          # 访问码：部署时在 Render 网页填写
+        sync: false              # 敏感值：部署时在 Render 网页填写（阿里百炼 Key）
+      # 公开模式：任何人打开链接即可直接使用，无需访问码
+      - key: VI_PUBLIC
+        value: "true"
+      # 每日解析上限，防止链接被转发后被刷爆 AI 额度
       - key: VI_DAILY_LIMIT
-        value: "20"          # 每日最多解析 20 次，防止访问码外泄后被刷额度
+        value: "50"
+      # 免费层内存较小，降低抽帧规格防止 OOM
+      - key: VI_MAX_FRAMES
+        value: "8"
+      - key: VI_FRAME_WIDTH
+        value: "640"
+      - key: VI_MAX_VIDEO_MB
+        value: "200"
