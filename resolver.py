@@ -304,6 +304,22 @@ def _has_curl_cffi() -> bool:
         return False
 
 
+def _impersonate_target():
+    """构造浏览器伪装目标。
+
+    坑：yt-dlp 的 Python API 只接受 ImpersonateTarget 对象，直接传字符串
+    'chrome' 会在内部 assert 失败并抛出「空消息」的 AssertionError，
+    导致所有平台一起挂掉——必须先用 from_str() 解析。
+    """
+    if not _has_curl_cffi():
+        return None
+    try:
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+        return ImpersonateTarget.from_str("chrome")
+    except Exception:
+        return None
+
+
 # YouTube 各客户端的风控松紧不同，逐个尝试直到成功（数据中心 IP 常 429）
 _YT_CLIENT_SETS = (
     ["tv_embedded"],
@@ -358,7 +374,7 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
 
     # 浏览器 TLS 伪装：Dailymotion / Vimeo / YouTube 都在校验 TLS 指纹，
     # 缺 curl_cffi 时 yt-dlp 会抛 "attempting impersonation but none ..."
-    impersonatable = _has_curl_cffi()
+    impersonate = _impersonate_target()
 
     # 先拿站点 Cookie 再请求，能绕开大部分云服务器 IP 的风控拦截（B站 412 等）
     cookiefile = _prepare_cookies(url, outdir)
@@ -373,8 +389,8 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
     last_err = ""
     for arg in attempts:
         opts = base_opts()
-        if impersonatable:
-            opts["impersonate"] = "chrome"
+        if impersonate:
+            opts["impersonate"] = impersonate
         if ffmpeg_path:
             opts["ffmpeg_location"] = ffmpeg_path
         if cookiefile:
@@ -399,12 +415,16 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
             # 下载成功但文件过小，换下一套参数重试
             last_err = "下载到的文件过小，可能不是视频"
         except Exception as exc:
-            msg = str(exc)
+            # AssertionError 等异常的 str() 是空串，必须用 repr 兜底，
+            # 否则用户会看到一个完全没有信息的「该链接解析失败：」
+            msg = str(exc) or repr(exc) or type(exc).__name__
             last_err = msg
-            # 429/限流 → 换下一个客户端重试；其它错误直接抛出更快
-            if "429" in msg or "Too Many Requests" in msg:
+            # 伪装目标不被当前环境支持 → 关掉伪装重试，别让整条链路卡死
+            if impersonate and ("Impersonate" in msg or type(exc).__name__ == "AssertionError"):
+                impersonate = None
                 continue
-            if is_yt and ("client" in msg.lower() or "Sign in" in msg or "confirm" in msg.lower()):
+            # 429/限流 → 换下一套客户端参数重试
+            if "429" in msg or "Too Many Requests" in msg:
                 continue
             if is_yt:
                 continue
