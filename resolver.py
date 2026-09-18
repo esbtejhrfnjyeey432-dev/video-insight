@@ -116,6 +116,10 @@ def resolve_douyin(url: str, dest: str) -> str:
     if "v.douyin.com" in url:
         r = s.get(url, allow_redirects=True, timeout=25)
         final_url = r.url
+        home = re.sub(r"^https?://", "", final_url).strip("/").lower()
+        if home in ("www.douyin.com", "douyin.com", "v.douyin.com"):
+            raise ResolveError(
+                "这条抖音短链已失效（跳回了首页）。抖音分享短链有时效，请让对方重新复制一次最新链接")
     m = (re.search(r"/(?:video|note)/(\d+)", final_url)
          or re.search(r"modal_id=(\d+)", final_url)
          or re.search(r"/(\d{15,})", final_url))
@@ -186,6 +190,12 @@ def resolve_xhs(url: str, dest: str) -> str:
     if "xhslink.com" in url:
         r = s.get(url, allow_redirects=True, timeout=25)
         final_url = r.url
+        # 短链有时效，失效后会跳回小红书首页而不是报错。这里提前识别，
+        # 避免把「链接过期」误报成「代码解析失败」
+        home = re.sub(r"^https?://", "", final_url).strip("/").lower()
+        if home in ("www.xiaohongshu.com", "xiaohongshu.com", "www.xhslink.com", "xhslink.com"):
+            raise ResolveError(
+                "这条小红书短链已失效（跳回了首页）。小红书分享短链有时效，请让对方重新复制一次最新链接")
     m = (re.search(r"/explore/([0-9a-zA-Z]+)", final_url)
          or re.search(r"/discovery/item/([0-9a-zA-Z]+)", final_url))
     if not m:
@@ -230,7 +240,81 @@ def resolve_xhs(url: str, dest: str) -> str:
     return title
 
 
+# ---------------------------------------------------------------- Vimeo
+def resolve_vimeo(url: str, dest: str) -> str:
+    """Vimeo 自研解析：走官方播放器 config 接口取 mp4 直链。
+
+    yt-dlp 的 Vimeo 提取器现在强制要求 web 客户端登录，公开视频也会报
+    "The web client only works when logged-in"。官方播放器 config 接口对
+    公开视频仍然可用，能拿到 progressive mp4 直链。
+    """
+    m = (re.search(r"vimeo\.com/(\d+)", url)
+         or re.search(r"player\.vimeo\.com/video/(\d+)", url))
+    if not m:
+        raise ResolveError("无法从 Vimeo 链接中识别视频 ID")
+    vid = m.group(1)
+    # 私密/未列出的视频链接形如 vimeo.com/123456/abcdef123，需要带 h 参数
+    hm = re.search(r"vimeo\.com/\d+/([0-9a-f]{6,})", url)
+    api = f"https://player.vimeo.com/video/{vid}/config"
+    if hm:
+        api += f"?h={hm.group(1)}"
+
+    s = requests.Session()
+    r = s.get(api, timeout=25, headers={
+        "User-Agent": DESKTOP_UA,
+        "Referer": "https://vimeo.com/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    })
+    if r.status_code != 200:
+        raise ResolveError(f"Vimeo 播放器接口返回 HTTP {r.status_code}（视频可能设置了域名白名单或已删除）")
+    try:
+        data = r.json()
+    except Exception:
+        raise ResolveError("Vimeo 播放器接口返回了非 JSON 内容（可能被风控拦截）")
+
+    title = ((data.get("video") or {}).get("title") or "")[:80]
+    progressive = ((data.get("request") or {}).get("files") or {}).get("progressive") or []
+    if not progressive:
+        raise ResolveError("该 Vimeo 视频没有可直接下载的 mp4 源（可能受域名白名单限制）")
+    # 清晰度从高到低挑一个不超过 720p 的
+    cands = [p for p in progressive if (p.get("height") or 0) <= 720] or progressive
+    pick = max(cands, key=lambda p: p.get("height") or 0)
+    play_url = pick.get("url")
+    if not play_url:
+        raise ResolveError("Vimeo 直链为空，解析失败")
+
+    with s.get(play_url, stream=True, timeout=180,
+               headers={"Referer": "https://vimeo.com/",
+                        "User-Agent": DESKTOP_UA}) as r3:
+        if r3.status_code != 200:
+            raise ResolveError(f"Vimeo 视频下载失败（HTTP {r3.status_code}）")
+        _save_stream(r3, dest)
+    return title
+
+
 # ---------------------------------------------------------------- yt-dlp 通用引擎
+def _has_curl_cffi() -> bool:
+    """curl_cffi 让 yt-dlp 可以完整伪装成真实浏览器（TLS 指纹），
+    是绕开数据中心 IP 风控的关键依赖。缺失时 yt-dlp 在部分站点会直接报错。"""
+    try:
+        import curl_cffi  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+# YouTube 各客户端的风控松紧不同，逐个尝试直到成功（数据中心 IP 常 429）
+_YT_CLIENT_SETS = (
+    ["tv_embedded"],
+    ["web_embedded"],
+    ["mweb"],
+    ["android_vr"],
+    ["android", "ios"],
+    ["web_safari"],
+)
+
+
 def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
     """yt-dlp 支持 1000+ 平台（B站/微博/西瓜/YouTube 等）。返回 (标题, 文件路径)。"""
     try:
@@ -250,55 +334,83 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
     if "bilibili" in host:
         # B站会校验来源，缺 Origin 时数据中心 IP 更容易被判定为爬虫
         anti_headers["Origin"] = "https://www.bilibili.com"
-    opts = {
-        "outtmpl": prefix + ".%(ext)s",
-        # 先取 720p 以下的单文件格式，取不到再合并音视频（需要 ffmpeg）
-        "format": "b[height<=720]/bv*[height<=720]+ba/b",
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-        "noplaylist": True,
-        "max_filesize": MAX_VIDEO_BYTES,
-        "socket_timeout": 30,
-        "retries": 5,
-        "extractor_retries": 3,
-        "fragment_retries": 3,
-        "playlist_items": "1",
-        "http_headers": anti_headers,
-    }
-    # 数据中心 IP 常被 YouTube 用 web 客户端限流（HTTP 429）。改用 android/ios/tv
-    # 等移动端客户端取流，风控明显更松，能绕开绝大多数 429。
-    if "youtube" in host or "youtu.be" in host:
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "ios", "tv_embedded", "web_embedded"]}
+
+    def base_opts():
+        return {
+            "outtmpl": prefix + ".%(ext)s",
+            # AI 分析只需 8 帧 640px 宽的图，480p 完全够用；优先单文件 480p
+            # 可省掉 ffmpeg 合并，实测把 26 分钟视频的下载从 154s 压到 ~20s
+            "format": ("b[height<=480]/bv*[height<=480]+ba/"
+                       "b[height<=720]/bv*[height<=720]+ba/b"),
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "noplaylist": True,
+            "max_filesize": MAX_VIDEO_BYTES,
+            "socket_timeout": 30,
+            "retries": 5,
+            "extractor_retries": 3,
+            "fragment_retries": 3,
+            "playlist_items": "1",
+            "http_headers": anti_headers,
         }
-    if ffmpeg_path:
-        # 注意：必须传 ffmpeg 可执行文件的完整路径，imageio-ffmpeg 的文件名
-        # 不叫 ffmpeg.exe，传目录会导致 yt-dlp 找不到而合并失败
-        opts["ffmpeg_location"] = ffmpeg_path
+
+    # 浏览器 TLS 伪装：Dailymotion / Vimeo / YouTube 都在校验 TLS 指纹，
+    # 缺 curl_cffi 时 yt-dlp 会抛 "attempting impersonation but none ..."
+    impersonatable = _has_curl_cffi()
 
     # 先拿站点 Cookie 再请求，能绕开大部分云服务器 IP 的风控拦截（B站 412 等）
     cookiefile = _prepare_cookies(url, outdir)
-    if cookiefile:
-        opts["cookiefile"] = cookiefile
 
-    title = ""
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            if info:
-                title = (info.get("title") or "")[:80]
-    except Exception as exc:
-        raise ResolveError(_translate_ytdlp_error(str(exc)))
+    is_yt = "youtube" in host or "youtu.be" in host
+    attempts = []
+    if is_yt:
+        for clients in _YT_CLIENT_SETS:
+            attempts.append({"youtube": {"player_client": list(clients)}})
+    attempts.append(None)  # 最后再试一次默认配置
 
-    # 合并后扩展名可能与模板不同，用 glob 找实际产物
-    for f in sorted(glob.glob(prefix + ".*")):
-        if f.endswith((".part", ".ytdl", ".json")):
-            continue
-        if os.path.getsize(f) >= 200 * 1024:
-            return title, f
-    raise ResolveError("未成功下载视频：链接可能已失效、需要登录或被平台限制")
+    last_err = ""
+    for arg in attempts:
+        opts = base_opts()
+        if impersonatable:
+            opts["impersonate"] = "chrome"
+        if ffmpeg_path:
+            opts["ffmpeg_location"] = ffmpeg_path
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+        if arg:
+            opts["extractor_args"] = arg
+        try:
+            title = ""
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info:
+                    title = (info.get("title") or "")[:80]
+                    # 有些落地页（如腾讯视频剧集页）能解析但没有可下格式
+                    if not (info.get("formats") or info.get("url")):
+                        raise yt_dlp.utils.DownloadError("no playable formats")
+            # 合并后扩展名可能与模板不同，用 glob 找实际产物
+            for f in sorted(glob.glob(prefix + ".*")):
+                if f.endswith((".part", ".ytdl", ".json")):
+                    continue
+                if os.path.getsize(f) >= 200 * 1024:
+                    return title, f
+            # 下载成功但文件过小，换下一套参数重试
+            last_err = "下载到的文件过小，可能不是视频"
+        except Exception as exc:
+            msg = str(exc)
+            last_err = msg
+            # 429/限流 → 换下一个客户端重试；其它错误直接抛出更快
+            if "429" in msg or "Too Many Requests" in msg:
+                continue
+            if is_yt and ("client" in msg.lower() or "Sign in" in msg or "confirm" in msg.lower()):
+                continue
+            if is_yt:
+                continue
+            raise ResolveError(_translate_ytdlp_error(msg))
+
+    raise ResolveError(_translate_ytdlp_error(last_err or "未知错误"))
 
 
 def _translate_ytdlp_error(msg: str) -> str:
@@ -317,6 +429,11 @@ def _translate_ytdlp_error(msg: str) -> str:
         return "平台限流了，请稍后再试"
     if "timed out" in m or "timeout" in m:
         return "下载超时：网络较慢或视频过大，请稍后再试或用「上传文件」"
+    if "no playable formats" in m:
+        return ("这个页面没有可直接播放的视频（多为剧集/合集首页）。"
+                "请打开具体某一集的播放页再复制链接")
+    if "only works when logged-in" in m or "web client" in m:
+        return "该站点要求登录才能取流：请下载视频到本地后用「上传文件」解析"
     detail = re.sub(r"\s+", " ", msg)[:160]
     return f"该链接解析失败：{detail}。也可以下载视频后用「上传文件」"
 
@@ -381,6 +498,22 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None):
                 raise ResolveError(
                     f"{exc}。小红书近期风控较严，最稳妥的方式：保存视频到本地，再用「上传文件」解析"
                 )
+
+    # 2.5 Vimeo：自研播放器解析 → yt-dlp 兜底
+    if "vimeo.com" in host:
+        dest = os.path.join(outdir, "vimeo.mp4")
+        try:
+            title = resolve_vimeo(url, dest)
+            return "Vimeo", title, dest
+        except ResolveError as exc:
+            if "超过" in str(exc):
+                raise
+            try:
+                title, path = resolve_ytdlp(url, outdir, ffmpeg_path)
+                return "Vimeo", title, path
+            except ResolveError:
+                raise ResolveError(
+                    f"{exc}。也可以下载视频到本地后用「上传文件」解析")
 
     # 3. 视频文件直链（.mp4 等结尾）→ 直接下载更快
     path_part = urlparse(url).path.lower()
