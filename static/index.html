@@ -111,19 +111,20 @@
 
   <div class="card">
     <div class="tabs">
-      <div class="tab active" data-tab="upload">上传视频</div>
+      <div class="tab active" data-tab="upload">上传视频（推荐）</div>
       <div class="tab" data-tab="url">视频链接</div>
     </div>
     <div class="drop" id="drop">
       <b>点击选择视频文件</b> 或把视频拖拽到这里
-      <div class="hint">支持 mp4 / mov / webm 等常见格式，最大 95MB；视频上传到云端解析，解析完即删除、不会保存</div>
+      <div class="hint">支持 mp4 / mov / webm 等常见格式，最大 95MB；视频上传到云端解析，解析完即删除、不会保存。<b>这条路径不受任何平台风控影响，100% 可用</b></div>
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
-      <input type="text" id="urlInput" placeholder="粘贴任意视频链接或分享文案：B站 / 抖音 / 小红书 / 微博 / 西瓜 / YouTube 等 1000+ 平台">
+      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 腾讯视频 / YouTube 等">
     </div>
     <div id="urlHint" style="display:none;font-size:13px;color:var(--muted);margin-top:8px">
-      支持平台：B 站 · 微博 · 西瓜 · YouTube · 抖音 · 小红书 等 1000+ 网站。手机 App 里点「<b>分享 → 复制链接</b>」，把<b>整段文字</b>直接粘贴进来即可，系统自动提取链接。<br>遇到平台风控解析失败时，下载视频后用上方「上传文件」一定可以解析。
+      手机 App 里点「<b>分享 → 复制链接</b>」，把<b>整段文字</b>直接粘贴进来即可，系统自动提取链接。<br>
+      说明：云端服务器解析链接时，部分平台（YouTube、Vimeo、腾讯视频等）会因数据中心 IP 风控或登录限制失败，属正常现象；<b>解析失败时把视频下载到本地，再用「上传视频」一定可以解析</b>。
     </div>
     <div class="actions">
       <button class="primary" id="btnGo">开始解析</button>

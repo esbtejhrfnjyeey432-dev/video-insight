@@ -304,13 +304,21 @@ def _has_curl_cffi() -> bool:
         return False
 
 
-def _impersonate_target():
-    """构造浏览器伪装目标。
+# 只有这些站点实测需要 TLS 伪装：Dailymotion 缺伪装会直接报
+# "attempting impersonation"，YouTube/Vimeo 在数据中心 IP 上被严格风控。
+# 反过来，B站开了伪装反而拿不到 formats（实测 3/3 → 0/3），所以必须按站点开关。
+IMPERSONATE_HOSTS = ("dailymotion", "dai.ly", "youtube", "youtu.be", "vimeo")
+
+
+def _impersonate_target(host: str):
+    """构造浏览器伪装目标（仅对需要伪装的站点启用）。
 
     坑：yt-dlp 的 Python API 只接受 ImpersonateTarget 对象，直接传字符串
     'chrome' 会在内部 assert 失败并抛出「空消息」的 AssertionError，
     导致所有平台一起挂掉——必须先用 from_str() 解析。
     """
+    if not any(h in host for h in IMPERSONATE_HOSTS):
+        return None
     if not _has_curl_cffi():
         return None
     try:
@@ -354,9 +362,11 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
     def base_opts():
         return {
             "outtmpl": prefix + ".%(ext)s",
-            # AI 分析只需 8 帧 640px 宽的图，480p 完全够用；优先单文件 480p
-            # 可省掉 ffmpeg 合并，实测把 26 分钟视频的下载从 154s 压到 ~20s
-            "format": ("b[height<=480]/bv*[height<=480]+ba/"
+            # AI 抽帧宽度就是 640px，360p 的画面信息完全够用。
+            # 优先取 360p 能显著降低下载+合并耗时（26 分钟视频 154s → 更快），
+            # 也避免 Render 免费版 512MB 内存在合并大文件时 OOM。
+            "format": ("b[height<=360]/bv*[height<=360]+ba/"
+                       "b[height<=480]/bv*[height<=480]+ba/"
                        "b[height<=720]/bv*[height<=720]+ba/b"),
             "merge_output_format": "mp4",
             "quiet": True,
@@ -374,7 +384,7 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
 
     # 浏览器 TLS 伪装：Dailymotion / Vimeo / YouTube 都在校验 TLS 指纹，
     # 缺 curl_cffi 时 yt-dlp 会抛 "attempting impersonation but none ..."
-    impersonate = _impersonate_target()
+    impersonate = _impersonate_target(host)
 
     # 先拿站点 Cookie 再请求，能绕开大部分云服务器 IP 的风控拦截（B站 412 等）
     cookiefile = _prepare_cookies(url, outdir)
