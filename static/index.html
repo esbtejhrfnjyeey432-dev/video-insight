@@ -116,7 +116,7 @@
     </div>
     <div class="drop" id="drop">
       <b>点击选择视频文件</b> 或把视频拖拽到这里
-      <div class="hint">支持 mp4 / mov / webm 等常见格式，最大 500MB；文件只在本机解析，不会存到云端</div>
+      <div class="hint">支持 mp4 / mov / webm 等常见格式，最大 95MB；视频上传到云端解析，解析完即删除、不会保存</div>
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
@@ -317,8 +317,16 @@ $("drop").ondrop = function(e){
   if(e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
 };
 function setFile(f){
+  var mb = f.size / 1024 / 1024;
+  if(mb > 95){
+    currentFile = null;
+    $("fileTip").textContent = "";
+    showErr("这个视频有 " + mb.toFixed(0) + " MB，超过了云端 95MB 上限。请先压缩视频（如用手机「导出小尺寸」，或剪辑软件导出 720p），再重新选择");
+    return;
+  }
+  hideErr();
   currentFile = f;
-  $("fileTip").textContent = "已选择：" + f.name + "（" + (f.size/1024/1024).toFixed(1) + " MB）";
+  $("fileTip").textContent = "已选择：" + f.name + "（" + mb.toFixed(1) + " MB）";
 }
 
 /* 进度动画 */
