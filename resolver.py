@@ -120,6 +120,13 @@ def resolve_douyin(url: str, dest: str) -> str:
         if home in ("www.douyin.com", "douyin.com", "v.douyin.com"):
             raise ResolveError(
                 "这条抖音短链已失效（跳回了首页）。抖音分享短链有时效，请让对方重新复制一次最新链接")
+    # 分享链接可能指向「用户主页」或「直播间」，两者都不是可下载的视频作品。
+    # 不区分的话会统一报成「解析失败」，用户根本不知道该怎么改。
+    if "/share/user/" in final_url or re.search(r"/user/(MS4w|[\w-]{20,})", final_url):
+        raise ResolveError(
+            "这是抖音「用户主页」链接，不是一个视频。请打开具体那个视频，再点分享 → 复制链接")
+    if "webcast.amemv.com" in final_url or "/live/" in final_url:
+        raise ResolveError("这是抖音直播间链接，暂不支持解析直播。请分享具体的视频作品")
     m = (re.search(r"/(?:video|note)/(\d+)", final_url)
          or re.search(r"modal_id=(\d+)", final_url)
          or re.search(r"/(\d{15,})", final_url))
