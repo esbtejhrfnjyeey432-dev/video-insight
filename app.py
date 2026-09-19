@@ -128,6 +128,10 @@ def load_config() -> dict:
         cfg = {}
     if ENV_API_KEY:  # 部署模式：服务端环境变量优先，且不会被配置文件覆盖
         cfg["api_key"] = ENV_API_KEY
+    # 小红书登录 Cookie 优先读环境变量（服务端统一配置），否则读配置文件
+    env_xhs = os.environ.get("VI_XHS_COOKIE", "").strip()
+    if env_xhs:
+        cfg["xhs_cookie"] = env_xhs
     return cfg
 
 
@@ -324,18 +328,27 @@ def status():
 async def update_config(
     api_key: str = Form(""),
     model: str = Form(""),
+    xhs_cookie: str = Form(""),
     _code: None = Depends(require_code),
 ):
-    if DEPLOY_MODE:
-        # 公开部署版：API Key 由服务端统一持有，不提供任何修改入口
+    # 小红书 Cookie 是「可选」配置，公开部署版也允许用户自己填（放在环境变量里则不可改）
+    if DEPLOY_MODE and os.environ.get("VI_XHS_COOKIE"):
+        raise HTTPException(403, "小红书 Cookie 已由服务端统一配置，无需在页面里填写")
+    if DEPLOY_MODE and not xhs_cookie and not (api_key or model):
+        # 公开部署版：只允许设置小红书 Cookie，不允许动 API Key
         raise HTTPException(403, "线上版本已由作者统一配置 AI 服务，无需设置 API Key")
     cfg = load_config()
-    if api_key:
-        cfg["api_key"] = api_key.strip()
-    if model:
-        cfg["model"] = model.strip()
+    if not DEPLOY_MODE:
+        if api_key:
+            cfg["api_key"] = api_key.strip()
+        if model:
+            cfg["model"] = model.strip()
+    if xhs_cookie:
+        cfg["xhs_cookie"] = xhs_cookie.strip()
     save_config(cfg)
-    return {"ok": True, "has_key": bool(cfg.get("api_key")), "model": cfg.get("model")}
+    return {"ok": True, "has_key": bool(cfg.get("api_key")),
+            "model": cfg.get("model"),
+            "has_xhs_cookie": bool(cfg.get("xhs_cookie"))}
 
 
 @app.post("/api/analyze")
@@ -367,6 +380,7 @@ async def analyze(
                 # 支持直接粘贴 App 复制的整段分享文案（自动提取链接，通用平台解析）
                 platform, title, vpath = resolver.download_video(
                     url.strip(), tmpdir, FFMPEG,
+                    xhs_cookie=cfg.get("xhs_cookie", ""),
                 )
             except resolver.ResolveError as exc:
                 raise HTTPException(400, str(exc))

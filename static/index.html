@@ -129,7 +129,7 @@
       <b>实测支持情况：</b>
       <span style="color:#2b8a3e">B站 ✅</span>（稳定）、
       <span style="color:#2b8a3e">抖音 ✅</span>（须是<b>视频作品</b>的分享链接，用户主页/直播间链接不行）；
-      <span style="color:#c92a2a">小红书 ❌</span>（网页版要求登录态，服务器无法读取，请用上方「上传视频」）。<br>
+      <span style="color:#e8590c">小红书 ⚠️</span>（网页版要求登录态：在右上角「设置」里填小红书登录 Cookie 后才能解析，否则请用「上传视频」）。<br>
       链接解析受平台风控影响，失败时把视频保存到本地再用「上传视频」，一定可以解析。
     </div>
     <div class="actions">
@@ -188,13 +188,18 @@
   <div class="modal">
     <h3>设置</h3>
     <div class="note">API Key 只保存在你电脑本地的 config.json 中，分析时由本机程序直接调用阿里百炼，不会经过其他服务器。</div>
-    <div class="field">
+    <div class="field" id="keyField">
       <label>阿里百炼 API Key（在百炼控制台「API-KEY 管理」中创建）</label>
       <input type="password" id="keyInput" placeholder="sk-xxxxxxxx">
     </div>
-    <div class="field">
+    <div class="field" id="modelField">
       <label>视频理解模型</label>
       <select id="modelSelect"></select>
+    </div>
+    <div class="field">
+      <label>小红书登录 Cookie（可选，填了才能解析小红书链接）</label>
+      <textarea id="xhsCookie" rows="3" placeholder="电脑登录 xiaohongshu.com 后，按 F12 → Network 面板 → 点任意请求 → 复制请求头里的 Cookie 整段粘贴到这里"></textarea>
+      <div class="hint" style="margin-top:6px">Cookie 会过期（通常几天到几周），失效后重新复制一次即可。</div>
     </div>
     <div class="btns">
       <button id="btnCancel">取消</button>
@@ -268,8 +273,9 @@ function loadStatus(attempt){
     $("modelSelect").appendChild(o);
   });
   if(s.deploy_mode){
-    /* 公开部署版：AI 已由作者在服务端配置好，隐藏设置入口 */
-    $("btnSetting").style.display = "none";
+    /* 公开部署版：AI 已由作者在服务端配置好；设置里只留「小红书 Cookie」这一项 */
+    $("keyField").style.display = "none";
+    $("modelField").style.display = "none";
   } else if(!s.has_key){
     $("noKeyBanner").style.display = "block";
   }
@@ -541,6 +547,7 @@ $("btnSave").onclick = function(){
   var fd = new FormData();
   fd.append("api_key", $("keyInput").value.trim());
   fd.append("model", $("modelSelect").value);
+  fd.append("xhs_cookie", $("xhsCookie").value.trim());
   api("/api/config", { method:"POST", body: fd })
     .then(function(r){ return r.json(); })
     .then(function(j){
@@ -548,7 +555,7 @@ $("btnSave").onclick = function(){
         $("mask").style.display = "none";
         $("noKeyBanner").style.display = "none";
         $("keyInput").value = "";
-        toast("设置已保存");
+        toast(j.has_xhs_cookie ? "已保存（含小红书 Cookie）" : "设置已保存");
       } else if(j.detail){
         toast(j.detail);
       }

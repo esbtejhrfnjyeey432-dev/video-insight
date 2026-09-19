@@ -11,7 +11,7 @@ import glob
 import json
 import os
 import re
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -188,8 +188,13 @@ def resolve_douyin(url: str, dest: str) -> str:
 
 
 # ---------------------------------------------------------------- 小红书
-def resolve_xhs(url: str, dest: str) -> str:
-    """移动端 UA 访问笔记页解析内嵌数据（桌面 UA 会被要求登录）。返回标题。"""
+def resolve_xhs(url: str, dest: str, cookie: str = "") -> str:
+    """解析小红书笔记视频。返回标题。
+
+    新版路径（推荐）：用登录 Cookie + xys 签名请求移动端 feed API。
+    旧路径（无 Cookie）：解析网页 __INITIAL_STATE__，但小红书现已对未登录
+    请求不返回笔记数据，基本不可用，仅作兜底。
+    """
     s = requests.Session()
     s.headers.update({"User-Agent": MOBILE_UA})
 
@@ -208,7 +213,36 @@ def resolve_xhs(url: str, dest: str) -> str:
     if not m:
         raise ResolveError("无法从小红书链接中识别笔记：请确认复制的是笔记的分享链接")
     note_id = m.group(1)
+    tok = re.search(r"xsec_token=([^&]+)", final_url)
+    xsec_token = unquote(tok.group(1)) if tok else ""
 
+    # 新版：登录 Cookie + xys 签名（小红书 2025 起网页版必须登录态）
+    if cookie:
+        try:
+            import xhs_api
+            card, j = xhs_api.fetch_note_v2(note_id, xsec_token, cookie)
+            if card is None:
+                code = (j or {}).get("code")
+                raise ResolveError(
+                    f"小红书接口未返回笔记（code={code}）。通常是 Cookie 已过期，"
+                    "请重新登录小红书网页版并复制最新 Cookie")
+            play_url, title, kind = xhs_api.extract_video(card)
+            if kind == "image":
+                raise ResolveError("这条小红书是图文笔记，不是视频，无法解析")
+            if not play_url:
+                raise ResolveError("未能从笔记中提取视频地址（可能已被删除或设为私密）")
+            with s.get(play_url, stream=True, timeout=180,
+                       headers={"Referer": "https://www.xiaohongshu.com/"}) as r3:
+                if r3.status_code != 200:
+                    raise ResolveError(f"小红书视频下载失败（HTTP {r3.status_code}）")
+                _save_stream(r3, dest)
+            return title
+        except ResolveError:
+            raise
+        except Exception as exc:
+            raise ResolveError(f"小红书解析失败：{type(exc).__name__}: {exc}")
+
+    # 无 Cookie 兜底：网页版 __INITIAL_STATE__（已失效，但保留错误信息明确）
     r2 = s.get(
         f"https://www.xiaohongshu.com/explore/{note_id}",
         headers={"Accept-Language": "zh-CN,zh;q=0.9"},
@@ -237,7 +271,10 @@ def resolve_xhs(url: str, dest: str) -> str:
         except Exception:
             play_url = None
     if not play_url:
-        raise ResolveError("小红书页面解析失败：该笔记可能已删除或平台要求登录")
+        raise ResolveError(
+            "小红书网页版现已要求登录态，服务器无法直接解析链接。"
+            "两个办法：① 在「设置」里填入小红书登录 Cookie 后重试；"
+            "② 在小红书 App 里把视频保存到本地，用「上传视频」解析（一定能用）")
 
     with s.get(play_url, stream=True, timeout=180,
                headers={"Referer": "https://www.xiaohongshu.com/"}) as r3:
@@ -489,10 +526,11 @@ def resolve_direct(url: str, dest: str) -> str:
 
 
 # ---------------------------------------------------------------- 主入口
-def download_video(text: str, outdir: str, ffmpeg_path: str = None):
+def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: str = ""):
     """
     从用户粘贴的分享文案/链接下载视频。
     返回 (平台名称, 视频标题, 视频文件路径)。
+    xhs_cookie：可选，小红书登录 Cookie（网页版现在必须登录态才能解析）。
     """
     url = extract_url(text)
     if not url:
@@ -519,11 +557,11 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None):
                     f"{exc}。抖音近期风控较严，最稳妥的方式：在抖音 App 里下载视频，再用「上传文件」解析"
                 )
 
-    # 2. 小红书：自写解析器 → yt-dlp 兜底
+    # 2. 小红书：登录 Cookie + xys 签名（有 Cookie）→ yt-dlp 兜底
     if is_xhs:
         dest = os.path.join(outdir, "xhs.mp4")
         try:
-            title = resolve_xhs(url, dest)
+            title = resolve_xhs(url, dest, cookie=xhs_cookie)
             return "小红书", title, dest
         except ResolveError as exc:
             if "超过" in str(exc) or "图文" in str(exc):
@@ -533,9 +571,9 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None):
                 return "小红书", title, path
             except ResolveError:
                 raise ResolveError(
-                    "小红书网页版现在要求登录态才会返回笔记内容，服务器无法自动解析链接"
-                    "（自研解析与 yt-dlp 两条路都试过）。"
-                    "请在小红书 App 里把视频保存到本地，再用「上传视频」解析——这条路一定能用"
+                    "小红书网页版现在要求登录态才会返回笔记内容。"
+                    "解决办法：① 在「设置」里填入小红书登录 Cookie 后重试；"
+                    "② 在小红书 App 里把视频保存到本地，用「上传视频」解析（一定能用）"
                 )
 
     # 2.5 Vimeo：自研播放器解析 → yt-dlp 兜底
