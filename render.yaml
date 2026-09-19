@@ -23,9 +23,9 @@ services:
       # 每日解析上限，防止链接被转发后被刷爆 AI 额度
       - key: VI_DAILY_LIMIT
         value: "50"
-      # 免费层内存较小，降低抽帧规格防止 OOM
+      # 免费层内存较小，降低抽帧规格防止 OOM（6 帧是速度/质量平衡点）
       - key: VI_MAX_FRAMES
-        value: "8"
+        value: "6"
       - key: VI_FRAME_WIDTH
         value: "640"
       - key: VI_MAX_VIDEO_MB

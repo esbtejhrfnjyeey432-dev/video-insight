@@ -42,6 +42,8 @@
   .progress{display:none;margin-top:18px}
   .bar{height:8px;background:#eef1f5;border-radius:99px;overflow:hidden}
   .bar i{display:block;height:100%;width:0;background:var(--blue);border-radius:99px;transition:width .5s}
+  .bar i.pulse{animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .ptext{font-size:13px;color:var(--muted);margin-top:8px}
   .sec-title{font-size:15px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
   .sec-title .tag{font-size:12px;font-weight:400;background:var(--teal-l);color:var(--teal-d);border-radius:6px;padding:1px 8px}
@@ -334,35 +336,82 @@ function setFile(f){
   $("fileTip").textContent = "已选择：" + f.name + "（" + mb.toFixed(1) + " MB）";
 }
 
-/* 进度动画 */
+/* 进度：上传阶段显示真实百分比(0→30%)，AI 阶段动画(30%→92%→脉冲) */
+function startUploadPhase(){
+  clearInterval(timer);
+  $("progress").style.display = "block";
+  $("barFill").classList.remove("pulse");
+  $("barFill").style.width = "0%";
+  $("ptext").textContent = "正在上传视频… 0%";
+}
+function onUploadProgress(pct){
+  $("barFill").classList.remove("pulse");
+  $("barFill").style.width = Math.round(pct * 0.3) + "%";
+  $("ptext").textContent = "正在上传视频… " + pct + "%";
+}
+/* AI 分析阶段动画：走到 92% 后不停在"假完成"，持续脉冲提示，避免用户以为卡死 */
 function startProgress(){
   var steps = [
-    [8,  "正在读取视频…"],
-    [22, "抽取关键帧画面…"],
-    [45, "AI 正在理解视频内容…"],
-    [72, "正在提取关键信息与组织内容…"],
-    [90, "生成总体总结，整理报告…"]
+    [40, "抽取关键帧画面…"],
+    [58, "AI 正在理解视频内容…"],
+    [78, "正在提取关键信息与组织内容…"],
+    [92, "生成总体总结，整理报告…"]
   ];
-  var i = 0;
+  var i = 0, dots = 0;
+  clearInterval(timer);
   $("progress").style.display = "block";
-  $("barFill").style.width = "5%";
+  $("barFill").classList.remove("pulse");
+  $("barFill").style.width = "35%";
   $("ptext").textContent = steps[0][1];
   timer = setInterval(function(){
-    if(i < steps.length - 1){ i++; $("barFill").style.width = steps[i][0] + "%"; $("ptext").textContent = steps[i][1]; }
-  }, 6000);
+    if(i < steps.length){
+      $("barFill").style.width = steps[i][0] + "%";
+      $("ptext").textContent = steps[i][1];
+      i++;
+    } else {
+      dots = (dots + 1) % 4;
+      $("barFill").classList.add("pulse");
+      $("ptext").textContent = "AI 正在仔细分析中" + ".".repeat(dots) + "（大视频约需 1~3 分钟，请耐心等待，不要刷新）";
+    }
+  }, 5000);
 }
 function stopProgress(ok){
   clearInterval(timer);
+  $("barFill").classList.remove("pulse");
   $("barFill").style.width = "100%";
   setTimeout(function(){ $("progress").style.display = "none"; }, ok ? 400 : 0);
   if(!ok) $("barFill").style.width = "0%";
+}
+
+/* 用 XHR 上传以显示真实进度；上传完成后进入 AI 阶段动画 */
+function doAnalyze(fd, isUpload){
+  return new Promise(function(resolve, reject){
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", API_BASE + "/api/analyze");
+    xhr.setRequestHeader("X-Access-Code", accessCode);
+    if(isUpload && xhr.upload){
+      xhr.upload.onprogress = function(e){
+        if(e.lengthComputable) onUploadProgress(Math.round(e.loaded / e.total * 100));
+      };
+      xhr.upload.onload = function(){ startProgress(); };
+    }
+    xhr.onload = function(){
+      var j = null;
+      try { j = JSON.parse(xhr.responseText); } catch(e){}
+      if(xhr.status === 401){ reject(new Error("stop")); return; }
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, j: j });
+    };
+    xhr.onerror = function(){ reject(new Error("网络错误，请重试")); };
+    xhr.send(fd);
+  });
 }
 
 /* 开始解析 */
 $("btnGo").onclick = function(){
   hideErr();
   var fd = new FormData();
-  if(currentTab === "upload"){
+  var isUpload = currentTab === "upload";
+  if(isUpload){
     if(!currentFile){ toast("请先选择一个视频文件"); return; }
     fd.append("file", currentFile);
   } else {
@@ -371,16 +420,12 @@ $("btnGo").onclick = function(){
     fd.append("url", u);
   }
   $("btnGo").disabled = true;
-  startProgress();
-  api("/api/analyze", { method:"POST", body: fd })
-    .then(function(r){
-      if(r.status === 401){ stopProgress(false); $("btnGo").disabled = false; showGate(); return Promise.reject(new Error("stop")); }
-      return r.json().then(function(j){ return { ok: r.ok, j: j }; });
-    })
+  if(isUpload){ startUploadPhase(); } else { startProgress(); }
+  doAnalyze(fd, isUpload)
     .then(function(res){
       stopProgress(res.ok);
       $("btnGo").disabled = false;
-      if(!res.ok){ showErr(res.j.detail || "解析失败，请重试"); return; }
+      if(!res.ok){ showErr((res.j && res.j.detail) || "解析失败，请重试"); return; }
       lastResult = res.j;
       render(res.j);
       toast("解析完成");

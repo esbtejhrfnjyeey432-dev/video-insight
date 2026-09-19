@@ -69,8 +69,14 @@ PUBLIC_MODE = _env_flag("VI_PUBLIC", True)
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-plus"
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
-# 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 8 帧 / 640px）
+# 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 6 帧 / 640px）
 MAX_FRAMES = int(os.environ.get("VI_MAX_FRAMES", "12"))
+# 帧数硬上限：抽帧越多 AI 推理越慢。6 帧已能均匀覆盖全片关键画面，
+# 是「速度 / 质量」的平衡点；需要更精细可提高该上限（最多 12）。
+try:
+    MAX_FRAMES = min(MAX_FRAMES, int(os.environ.get("VI_FRAME_CAP", "6")))
+except Exception:
+    pass
 FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
 
