@@ -79,8 +79,6 @@
   .rcard h4{font-size:14px;color:var(--blue-d);margin-bottom:6px}
   .rcard p{font-size:13px;color:var(--muted)}
   .script{white-space:pre-wrap;background:#f8f9fb;border:1px solid var(--line);border-radius:10px;padding:14px;font-size:14px}
-  .clips li{display:flex;gap:10px;font-size:14px;padding:6px 0;border-bottom:1px dashed var(--line);list-style:none}
-  .clips li:last-child{border:none}
   .quotes li{list-style:none;font-size:14px;padding:5px 0 5px 20px;position:relative;color:var(--teal-d)}
   .quotes li::before{content:"「";position:absolute;left:0;top:5px;color:var(--teal)}
   .err{background:#FCEBEB;border:1px solid #F09595;color:#A32D2D;border-radius:10px;padding:12px 16px;font-size:14px;margin-top:14px;display:none}
@@ -216,8 +214,6 @@
       <div class="cards" id="rcards" style="margin-bottom:16px"></div>
       <div class="sec-title" style="font-size:14px">60 秒短视频口播脚本</div>
       <div class="script" id="script" data-editable="1"></div>
-      <div class="sec-title" style="font-size:14px;margin-top:16px">精华剪辑点建议</div>
-      <ul class="clips" id="clips"></ul>
       <div class="sec-title" style="font-size:14px;margin-top:16px">金句摘录</div>
       <ul class="quotes" id="quotes"></ul>
     </div>
@@ -760,9 +756,6 @@ function render(a){
     return '<div class="rcard"><h4 data-editable="1">' + esc(c.title) + '</h4><p data-editable="1">' + esc(c.desc) + "</p></div>";
   }).join("");
   $("script").textContent = r.script || "";
-  $("clips").innerHTML = (r.clips || []).map(function(c){
-    return '<li><span class="t">' + esc(c.time) + '</span><span data-editable="1">' + esc(c.reason) + "</span></li>";
-  }).join("");
   $("quotes").innerHTML = (r.quotes || []).map(function(q){ return '<li data-editable="1">' + esc(q) + "</li>"; }).join("");
 
   $("overallSummary").textContent = a.overall_summary || "";
@@ -788,9 +781,6 @@ function syncReportFromDom(){
     return {title:(card.querySelector("h4")||{}).textContent || "", desc:(card.querySelector("p")||{}).textContent || ""};
   });
   remix.script = $("script").textContent.trim();
-  remix.clips = Array.from($("clips").querySelectorAll("li")).map(function(row){
-    var spans = row.querySelectorAll("span"); return {time:spans[0] ? spans[0].textContent.trim() : "", reason:spans[1] ? spans[1].textContent.trim() : ""};
-  });
   remix.quotes = Array.from($("quotes").querySelectorAll("li")).map(function(x){ return x.textContent.trim(); });
   lastResult.overall_summary = $("overallSummary").textContent.trim();
 }
@@ -830,8 +820,6 @@ function buildMarkdown(a){
   md.push("\n## Remix 衍生创作");
   (r.cards || []).forEach(function(c){ md.push("- **" + c.title + "**：" + c.desc); });
   md.push("\n### 60 秒口播脚本\n" + (r.script || ""));
-  md.push("\n### 精华剪辑点");
-  (r.clips || []).forEach(function(c){ md.push("- " + c.time + "：" + c.reason); });
   md.push("\n### 金句摘录");
   (r.quotes || []).forEach(function(q){ md.push("> " + q); });
   if(a.overall_summary) md.push("\n## 总体总结\n" + a.overall_summary);
@@ -858,7 +846,6 @@ function reportHtml(a){
   if(t.is_teaching) html += '<h2>教学观点提炼</h2>' + list(t.viewpoints) + '<p><b>讲解思路：</b>' + esc(t.logic||"") + '</p><p><b>适合人群：</b>' + esc(t.audience||"") + '</p>';
   html += '<h2>Remix 衍生创作</h2>' + (r.cards||[]).map(function(c){ return '<h3>' + esc(c.title) + '</h3><p>' + esc(c.desc) + '</p>'; }).join("");
   html += '<h3>60 秒口播脚本</h3><p>' + esc(r.script||"").replace(/\n/g,"<br>") + '</p>';
-  html += '<h3>精华剪辑点</h3><ul>' + (r.clips||[]).map(function(c){ return '<li><b>' + esc(c.time) + '</b> ' + esc(c.reason) + '</li>'; }).join("") + '</ul>';
   html += '<h3>金句摘录</h3>' + list(r.quotes);
   html += '<h2>总体总结</h2><p>' + esc(a.overall_summary||"") + '</p>';
   return html;
