@@ -101,8 +101,8 @@ class StabilityTests(unittest.TestCase):
             text = app.transcribe_remote_audio(
                 "https://example.com/video.mp4", {"api_key": "test-key"}, timeout=1)
         self.assertEqual(text, "这是语音内容。")
-        self.assertEqual(post.call_args.kwargs["json"]["input"]["file_url"],
-                         "https://example.com/video.mp4")
+        self.assertEqual(post.call_args.kwargs["json"]["input"]["file_urls"],
+                         ["https://example.com/video.mp4"])
         self.assertEqual(get.call_count, 2)
 
 

@@ -83,7 +83,8 @@ SERVICE_VERSION = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("VI_VERSION
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
 ASR_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
-ASR_MODEL = os.environ.get("VI_ASR_MODEL", "qwen3-asr-flash-filetrans").strip()
+ASR_MODEL = os.environ.get(
+    "VI_ASR_MODEL", "qwen-audio-3.0-asr-flash-filetrans").strip()
 DEFAULT_MODEL = "qwen3-vl-plus"
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
 # 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 6 帧 / 640px）
@@ -424,12 +425,15 @@ def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> st
         "Content-Type": "application/json",
         "X-DashScope-Async": "enable",
     }
+    is_qwen3 = ASR_MODEL.startswith("qwen3-")
+    asr_input = ({"file_url": media_url} if is_qwen3
+                 else {"file_urls": [media_url]})
     response = requests.post(
         ASR_SUBMIT_URL,
         headers=headers,
         json={
             "model": ASR_MODEL,
-            "input": {"file_url": media_url},
+            "input": asr_input,
             "parameters": {"channel_id": [0], "enable_itn": True},
         },
         timeout=30,
