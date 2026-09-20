@@ -514,7 +514,7 @@ async def analyze_frames(
         )
 
     mode, _ = _analysis_context(mode)
-    frame_limits = {"quick": 6, "standard": 12, "deep": 18}
+    frame_limits = {"quick": 6, "standard": 18, "deep": 36}
     limit = frame_limits[mode]
     if len(encoded) > limit:
         # 浏览器通常已按模式控制帧数；服务端再做一次上限保护，防止异常请求放大成本。
