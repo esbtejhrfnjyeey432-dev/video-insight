@@ -107,7 +107,6 @@
   <div class="logo"><span class="dot"></span>VideoInsight <small>视频解析 · 关键信息提取 / 总体总结 / Remix</small></div>
   <div class="btns">
     <button id="btnDemo">演示模式</button>
-    <button id="btnXhsHelp">小红书说明</button>
     <button id="btnSetting" style="display:none">本地设置</button>
   </div>
 </header>
@@ -191,16 +190,6 @@
 
   <footer>VideoInsight · 抽帧 + 多模态大模型内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作</footer>
 </main>
-
-<div class="modal-mask" id="xhsHelpMask">
-  <div class="modal">
-    <h3>小红书链接说明</h3>
-    <div class="note" style="font-size:14px;line-height:1.8">
-      支持提交小红书公开作品链接或完整分享文案。解析结果以作品当前可访问状态为准；如链接暂时无法读取，可选择本地视频继续分析。
-    </div>
-    <div class="btns"><button type="button" id="btnXhsHelpClose">我知道了</button></div>
-  </div>
-</div>
 
 <div class="modal-mask" id="mask">
   <div class="modal">
@@ -629,9 +618,6 @@ $("btnExport").onclick = function(){
 };
 
 /* 设置弹窗 */
-$("btnXhsHelp").onclick = function(){ $("xhsHelpMask").style.display = "flex"; };
-$("btnXhsHelpClose").onclick = function(){ $("xhsHelpMask").style.display = "none"; };
-$("xhsHelpMask").onclick = function(e){ if(e.target === this) this.style.display = "none"; };
 $("btnSetting").onclick = function(){ $("mask").style.display = "flex"; };
 $("btnCancel").onclick = function(){ $("mask").style.display = "none"; };
 $("mask").onclick = function(e){ if(e.target === this) this.style.display = "none"; };
