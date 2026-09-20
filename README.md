@@ -71,7 +71,7 @@ uvicorn app:app --host 0.0.0.0 --port 8765
 ## 生产运行基线
 
 - `/api/health` 是进程存活检查；`/api/ready` 同时检查 API Key、FFmpeg 和静态资源，未就绪返回 503。
-- GitHub Actions 对每次提交执行 Python 语法检查、稳定性测试和 Docker 构建；失败的提交不能视为可发布版本。
+- 仓库包含 `ci.workflow.example.yml` CI 模板，可执行 Python 语法检查、稳定性测试和 Docker 构建。启用前需用具备 GitHub `workflow` 权限的账号将其放到 `.github/workflows/ci.yml`。
 - Docker 容器使用非 root 用户运行，依赖使用精确版本，构建上下文排除测试视频和临时诊断文件。
 - 本地关键帧分析与链接解析使用独立并发池，避免单个长链接阻塞所有用户。
 
