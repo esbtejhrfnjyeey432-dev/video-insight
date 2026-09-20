@@ -60,9 +60,11 @@ ACCESS_CODE = os.environ.get("VI_ACCESS_CODE", "").strip()
 DEPLOY_MODE = bool(ENV_API_KEY)  # 服务端注入 Key 即视为公开部署模式
 DAILY_LIMIT = int(os.environ.get("VI_DAILY_LIMIT", "20"))  # 部署模式：每天最多解析次数
 _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外泄后被刷爆额度
-MAX_CONCURRENT_ANALYSES = max(1, int(os.environ.get("VI_MAX_CONCURRENT", "1")))
+MAX_LINK_CONCURRENT = max(1, int(os.environ.get("VI_MAX_LINK_CONCURRENT", "1")))
+MAX_FRAME_CONCURRENT = max(1, int(os.environ.get("VI_MAX_FRAME_CONCURRENT", "4")))
 ANALYSIS_QUEUE_TIMEOUT = max(1, int(os.environ.get("VI_QUEUE_TIMEOUT", "20")))
-_analysis_slots = asyncio.Semaphore(MAX_CONCURRENT_ANALYSES)
+_link_slots = asyncio.Semaphore(MAX_LINK_CONCURRENT)
+_frame_slots = asyncio.Semaphore(MAX_FRAME_CONCURRENT)
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name, "").strip().lower()
@@ -187,12 +189,14 @@ async def optional_code(x_access_code: str = Header(default="")):
     return None
 
 
-async def acquire_analysis_slot():
-    """免费实例内存有限，只允许少量分析并发；忙时快速返回可重试提示。"""
+async def acquire_analysis_slot(kind: str):
+    """本地抽帧与链接解析分池，轻任务多人并行，重任务限制并发防止 OOM。"""
+    slots = _frame_slots if kind == "frames" else _link_slots
     try:
-        await asyncio.wait_for(_analysis_slots.acquire(), timeout=ANALYSIS_QUEUE_TIMEOUT)
+        await asyncio.wait_for(slots.acquire(), timeout=ANALYSIS_QUEUE_TIMEOUT)
     except (asyncio.TimeoutError, TimeoutError):
         raise HTTPException(503, "当前有其他视频正在分析，请稍等片刻后重试")
+    return slots
 
 
 def check_daily_usage():
@@ -424,6 +428,8 @@ def status():
         "public_mode": PUBLIC_MODE,
         "daily_limit": DAILY_LIMIT,
         "max_frames": MAX_FRAMES,
+        "frame_concurrency": MAX_FRAME_CONCURRENT,
+        "link_concurrency": MAX_LINK_CONCURRENT,
     }
 
 
@@ -462,7 +468,7 @@ async def analyze(
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key：请点右上角「设置」填写阿里百炼 API Key，或先点「演示模式」看效果")
-    await acquire_analysis_slot()
+    analysis_slots = await acquire_analysis_slot("link")
     tmpdir = tempfile.mkdtemp(prefix="vinsight_video_")
     try:
         platform, title = "本地文件", ""
@@ -527,7 +533,7 @@ async def analyze(
         return analysis
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        _analysis_slots.release()
+        analysis_slots.release()
 
 
 @app.post("/api/analyze-frames")
@@ -570,7 +576,7 @@ async def analyze_frames(
         # 浏览器通常已按模式控制帧数；服务端再做一次上限保护，防止异常请求放大成本。
         picks = [round(i * (len(encoded) - 1) / (limit - 1)) for i in range(limit)]
         encoded = [encoded[i] for i in picks]
-    await acquire_analysis_slot()
+    analysis_slots = await acquire_analysis_slot("frames")
     try:
         check_daily_usage()
         analysis = await asyncio.to_thread(call_qwen, encoded, cfg, duration, mode)
@@ -584,7 +590,7 @@ async def analyze_frames(
         }
         return analysis
     finally:
-        _analysis_slots.release()
+        analysis_slots.release()
 
 
 @app.post("/api/resolve-test")

@@ -16,14 +16,25 @@ class StabilityTests(unittest.TestCase):
         async def scenario():
             old_timeout = app.ANALYSIS_QUEUE_TIMEOUT
             app.ANALYSIS_QUEUE_TIMEOUT = 1
-            await app.acquire_analysis_slot()
+            first_slot = await app.acquire_analysis_slot("link")
             try:
                 with self.assertRaises(HTTPException) as caught:
-                    await app.acquire_analysis_slot()
+                    await app.acquire_analysis_slot("link")
                 self.assertEqual(caught.exception.status_code, 503)
             finally:
-                app._analysis_slots.release()
+                first_slot.release()
                 app.ANALYSIS_QUEUE_TIMEOUT = old_timeout
+
+        asyncio.run(scenario())
+
+    def test_light_and_heavy_jobs_use_separate_pools(self):
+        async def scenario():
+            link_slot = await app.acquire_analysis_slot("link")
+            try:
+                frame_slot = await app.acquire_analysis_slot("frames")
+                frame_slot.release()
+            finally:
+                link_slot.release()
 
         asyncio.run(scenario())
 

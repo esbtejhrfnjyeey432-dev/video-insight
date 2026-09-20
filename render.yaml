@@ -30,8 +30,10 @@ services:
         value: "640"
       - key: VI_MAX_VIDEO_MB
         value: "200"
-      # 免费实例保持单任务分析，避免多个 ffmpeg / AI 请求同时触发 OOM
-      - key: VI_MAX_CONCURRENT
+      # 本地视频只上传关键帧，可多人同时分析；链接解析涉及 ffmpeg，单独限流防止 OOM
+      - key: VI_MAX_FRAME_CONCURRENT
+        value: "4"
+      - key: VI_MAX_LINK_CONCURRENT
         value: "1"
       - key: VI_QUEUE_TIMEOUT
         value: "20"
