@@ -274,9 +274,10 @@ def extract_remote_frames(stream_url: str, duration: float, headers: dict | None
     tmpdir = tempfile.mkdtemp(prefix="vinsight_remote_frames_")
     files = []
     try:
+        frame_count = 4 if duration >= 2 * 3600 else MAX_FRAMES
         header_blob = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
         def grab(i: int):
-            t = duration * (i + 0.5) / MAX_FRAMES
+            t = duration * (i + 0.5) / frame_count
             out = os.path.join(tmpdir, f"r{i:02d}.jpg")
             cmd = [FFMPEG, "-y", "-loglevel", "error", "-ss", f"{t:.2f}"]
             if header_blob:
@@ -286,10 +287,10 @@ def extract_remote_frames(stream_url: str, duration: float, headers: dict | None
             if _run_ffmpeg(cmd, timeout=75) and os.path.exists(out) and os.path.getsize(out) > 1000:
                 return out
             return None
-        # 免费实例只有约 0.1–0.5 CPU；两路并行能缩短长视频等待，又避免
-        # 6 个 ffmpeg 同时启动造成 512MB 内存实例被系统杀掉。
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            files = [f for f in pool.map(grab, range(MAX_FRAMES)) if f]
+        # 免费实例内存很小。两路 ffmpeg 在部分 B 站长视频上仍可能触发 OOM，
+        # 因此单路执行；两小时以上只取 4 帧，稳定优先。
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            files = [f for f in pool.map(grab, range(frame_count)) if f]
         if len(files) < 2:
             raise HTTPException(400, "平台允许读取链接信息，但阻止了远程抽帧；请保存到本地后上传")
         return ["data:image/jpeg;base64," + base64.b64encode(Path(f).read_bytes()).decode()
