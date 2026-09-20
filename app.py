@@ -429,9 +429,7 @@ async def analyze(
                 if duration <= 0:
                     duration = get_duration(stream_url, media_headers) or 0
                 vpath = ""
-            except resolver.ResolveError as exc:
-                if "weixin.qq.com/sph/" in url.lower():
-                    raise HTTPException(400, str(exc))
+            except resolver.ResolveError:
                 remote_info = None
             try:
                 if remote_info is None:
@@ -530,10 +528,8 @@ async def resolve_test(url: str = Form(...)):
                 "frames": len(sample_frames), "mode": "remote-sparse",
                 "secs": round(time.time() - t0, 1),
             }
-        except resolver.ResolveError as exc:
-            if "weixin.qq.com/sph/" in url.lower():
-                return {"ok": False, "error": str(exc),
-                        "secs": round(time.time() - t0, 1)}
+        except resolver.ResolveError:
+            pass
         platform, title, vpath = resolver.download_video(url.strip(), tmpdir, FFMPEG)
         size = os.path.getsize(vpath) if os.path.exists(vpath) else 0
         dur = get_duration(vpath) if os.path.exists(vpath) else None
