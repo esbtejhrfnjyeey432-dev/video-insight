@@ -132,9 +132,8 @@
       <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 小红书 / 海外公开视频">
     </div>
     <div id="urlHint" style="display:none;font-size:14px;line-height:1.8;color:var(--muted);margin-top:10px">
-      <b>使用说明：</b>请粘贴具体视频作品的公开分享链接，或直接粘贴手机 App 中“分享 → 复制链接”得到的完整文案。<br>
-      <b>支持范围：</b>系统可尝试解析 B站、抖音、小红书，以及 YouTube、Vimeo、Dailymotion 等海外平台的公开视频；外文画面信息将翻译为中文输出。小红书受平台登录策略限制，公开版不会收集用户的账号密码或登录 Cookie。<br>
-      <b>使用限制：</b>平台风控、反爬策略、接口调整、登录或会员权限、地区与版权限制、链接失效、媒体加密及网络状态均可能影响解析结果。若链接无法读取，请通过平台允许的方式保存视频后使用“上传视频”；请仅处理本人有权访问和使用的内容。
+      支持 B站、抖音、小红书及常见海外平台的公开视频链接，也可直接粘贴手机 App 生成的分享文案。外文画面信息将自动整理为中文报告。<br>
+      链接解析结果以源平台实际可用状态为准；如暂时无法读取，可使用“上传视频”继续分析。
     </div>
     <div class="actions">
       <button class="primary" id="btnGo">开始解析</button>
@@ -146,8 +145,8 @@
     </div>
     <div class="err" id="errBox"></div>
     <div class="link-fallback" id="linkFallback">
-      <b>该平台暂时拒绝服务器读取，但视频仍然可以分析</b>
-      抖音、小红书及部分海外平台有时只允许在发布者或观看者自己的 App / 浏览器里播放。把视频按平台允许的方式保存到设备后，点下面按钮即可继续；系统只在浏览器本地抽取关键帧，不上传原视频，也不要求登录或填写 Cookie。
+      <b>当前链接暂时无法读取</b>
+      你仍可选择本地视频继续分析，系统将在浏览器中完成关键帧提取。
       <br><button type="button" id="btnFallbackUpload">选择视频并继续分析</button>
     </div>
   </div>
@@ -197,7 +196,7 @@
   <div class="modal">
     <h3>小红书链接说明</h3>
     <div class="note" style="font-size:14px;line-height:1.8">
-      小红书公开视频链接可以提交解析，但平台可能要求登录并启用风控验证，因此无法保证每条链接都能由云服务器直接读取。为保护账号安全，公开版不会要求或保存访客的账号密码、登录 Cookie 等凭证。链接读取失败时，请通过平台允许的方式将视频保存到设备，再使用“上传视频”功能进行分析。
+      支持提交小红书公开作品链接或完整分享文案。解析结果以作品当前可访问状态为准；如链接暂时无法读取，可选择本地视频继续分析。
     </div>
     <div class="btns"><button type="button" id="btnXhsHelpClose">我知道了</button></div>
   </div>
