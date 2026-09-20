@@ -341,9 +341,9 @@ def resolve_xhs(url: str, dest: str, cookie: str = "") -> str:
             play_url = None
     if not play_url:
         raise ResolveError(
-            "小红书网页版现已要求登录态，服务器无法直接解析链接。"
-            "两个办法：① 在「设置」里填入小红书登录 Cookie 后重试；"
-            "② 在小红书 App 里把视频保存到本地，用「上传视频」解析（一定能用）")
+            "该小红书链接需要平台登录权限，公开服务器无法直接读取。"
+            "请通过平台允许的方式将视频保存到设备，再使用「上传视频」进行分析；"
+            "公开版不会收集账号密码或登录 Cookie。")
 
     with s.get(play_url, stream=True, timeout=180,
                headers={"Referer": "https://www.xiaohongshu.com/"}) as r3:
@@ -768,9 +768,9 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: 
                 return "小红书", title, path
             except ResolveError:
                 raise ResolveError(
-                    "小红书网页版现在要求登录态才会返回笔记内容。"
-                    "解决办法：① 在「设置」里填入小红书登录 Cookie 后重试；"
-                    "② 在小红书 App 里把视频保存到本地，用「上传视频」解析（一定能用）"
+                    "该小红书链接需要平台登录权限，公开服务器无法直接读取。"
+                    "请通过平台允许的方式将视频保存到设备，再使用「上传视频」进行分析；"
+                    "公开版不会收集账号密码或登录 Cookie。"
                 )
 
     # 2.5 Vimeo：自研播放器解析 → yt-dlp 兜底
