@@ -104,7 +104,7 @@
   <div class="logo"><span class="dot"></span>VideoInsight <small>视频解析 · 关键信息提取 / 总体总结 / Remix</small></div>
   <div class="btns">
     <button id="btnDemo">演示模式</button>
-    <button id="btnSetting">设置</button>
+    <button id="btnSetting" style="display:none">本地设置</button>
   </div>
 </header>
 
@@ -118,7 +118,7 @@
     </div>
     <div class="drop" id="drop">
       <b>点击选择视频文件</b> 或把视频拖拽到这里
-      <div class="hint">支持 mp4 / mov / webm 等常见格式，最大 95MB；视频上传到云端解析，解析完即删除、不会保存。<b>这条路径不受任何平台风控影响，100% 可用</b></div>
+      <div class="hint">支持 mp4 / mov / webm 等常见格式，最长约 3 小时。长视频会在你的浏览器中抽取 36 张关键帧，<b>原视频不上传</b>，只上传压缩后的画面用于分析。</div>
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
@@ -129,7 +129,7 @@
       <b>实测支持情况：</b>
       <span style="color:#2b8a3e">B站 ✅</span>（稳定）、
       <span style="color:#2b8a3e">抖音 ✅</span>（须是<b>视频作品</b>的分享链接，用户主页/直播间链接不行）；
-      <span style="color:#e8590c">小红书 ⚠️</span>（网页版要求登录态：在右上角「设置」里填小红书登录 Cookie 后才能解析，否则请用「上传视频」）。<br>
+      <span style="color:#e8590c">小红书 ⚠️</span>（公开版不收集登录凭证；请先保存视频，再使用「上传视频」解析）。<br>
       链接解析受平台风控影响，失败时把视频保存到本地再用「上传视频」，一定可以解析。
     </div>
     <div class="actions">
@@ -187,7 +187,7 @@
 <div class="modal-mask" id="mask">
   <div class="modal">
     <h3>设置</h3>
-    <div class="note">API Key 只保存在你电脑本地的 config.json 中，分析时由本机程序直接调用阿里百炼，不会经过其他服务器。</div>
+    <div class="note">这是仅供本地私有部署使用的设置。公开网页已由站点管理员配置 AI，访客无需填写 API Key。</div>
     <div class="field" id="keyField">
       <label>阿里百炼 API Key（在百炼控制台「API-KEY 管理」中创建）</label>
       <input type="password" id="keyInput" placeholder="sk-xxxxxxxx">
@@ -197,9 +197,9 @@
       <select id="modelSelect"></select>
     </div>
     <div class="field">
-      <label>小红书登录 Cookie（可选，填了才能解析小红书链接）</label>
-      <textarea id="xhsCookie" rows="3" placeholder="电脑登录 xiaohongshu.com 后，按 F12 → Network 面板 → 点任意请求 → 复制请求头里的 Cookie 整段粘贴到这里"></textarea>
-      <div class="hint" style="margin-top:6px">Cookie 会过期（通常几天到几周），失效后重新复制一次即可。</div>
+      <label>小红书登录凭证（仅本地私有部署可选）</label>
+      <textarea id="xhsCookie" rows="4" placeholder="仅在你自己电脑上运行本工具时使用。公开网站不会要求访客填写登录凭证。"></textarea>
+      <div class="hint" style="margin-top:6px">登录凭证可能失效，也可能被他人用来冒用你的登录状态；请勿填入不可信的网站或发给他人。</div>
     </div>
     <div class="btns">
       <button id="btnCancel">取消</button>
@@ -272,12 +272,10 @@ function loadStatus(attempt){
     if(m === s.model) o.selected = true;
     $("modelSelect").appendChild(o);
   });
-  if(s.deploy_mode){
-    /* 公开部署版：AI 已由作者在服务端配置好；设置里只留「小红书 Cookie」这一项 */
-    $("keyField").style.display = "none";
-    $("modelField").style.display = "none";
-  } else if(!s.has_key){
-    $("noKeyBanner").style.display = "block";
+  if(!s.deploy_mode){
+    /* 只有本地私有版在状态接口明确确认后才显示设置。 */
+    $("btnSetting").style.display = "inline-block";
+    if(!s.has_key) $("noKeyBanner").style.display = "block";
   }
   if(s.need_code && !accessCode) showGate();
   }).catch(function(){
@@ -331,15 +329,65 @@ $("drop").ondrop = function(e){
 };
 function setFile(f){
   var mb = f.size / 1024 / 1024;
-  if(mb > 95){
+  if(!f.type.startsWith("video/")){
     currentFile = null;
     $("fileTip").textContent = "";
-    showErr("这个视频有 " + mb.toFixed(0) + " MB，超过了云端 95MB 上限。请先压缩视频（如用手机「导出小尺寸」，或剪辑软件导出 720p），再重新选择");
+    showErr("请选择可播放的视频文件");
     return;
   }
   hideErr();
   currentFile = f;
   $("fileTip").textContent = "已选择：" + f.name + "（" + mb.toFixed(1) + " MB）";
+}
+
+var LOCAL_FRAME_COUNT = 36;
+function seekVideo(video, time){
+  return new Promise(function(resolve, reject){
+    var done = function(){ cleanup(); resolve(); };
+    var fail = function(){ cleanup(); reject(new Error("无法读取该时间点")); };
+    var cleanup = function(){ video.removeEventListener("seeked", done); video.removeEventListener("error", fail); };
+    video.addEventListener("seeked", done, {once:true});
+    video.addEventListener("error", fail, {once:true});
+    video.currentTime = Math.max(0, Math.min(time, video.duration - 0.05));
+  });
+}
+function canvasBlob(canvas){
+  return new Promise(function(resolve, reject){
+    canvas.toBlob(function(blob){ blob ? resolve(blob) : reject(new Error("关键帧压缩失败")); }, "image/jpeg", 0.72);
+  });
+}
+async function extractLocalFrames(file){
+  var video = document.createElement("video"), objectUrl = URL.createObjectURL(file);
+  video.preload = "metadata"; video.muted = true; video.src = objectUrl;
+  try{
+    await new Promise(function(resolve, reject){
+      video.onloadedmetadata = resolve;
+      video.onerror = function(){ reject(new Error("浏览器无法解码该视频，请转为 MP4(H.264) 后重试")); };
+    });
+    if(!isFinite(video.duration) || video.duration <= 0) throw new Error("无法读取视频时长");
+    if(video.duration > 3 * 3600 + 300) throw new Error("当前支持最长约 3 小时的视频");
+    var count = Math.min(LOCAL_FRAME_COUNT, Math.max(6, Math.ceil(video.duration / 300) * 3));
+    var canvas = document.createElement("canvas"), ctx = canvas.getContext("2d"), blobs = [];
+    var width = Math.min(768, video.videoWidth || 768);
+    canvas.width = width; canvas.height = Math.max(2, Math.round(width * (video.videoHeight || 432) / (video.videoWidth || 768)));
+    for(var i=0;i<count;i++){
+      $("ptext").textContent = "正在本地抽取关键帧… " + (i + 1) + "/" + count;
+      $("barFill").style.width = Math.round((i + 1) / count * 30) + "%";
+      await seekVideo(video, video.duration * (i + 0.5) / count);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      blobs.push(await canvasBlob(canvas));
+    }
+    return {frames:blobs, duration:video.duration};
+  } finally { URL.revokeObjectURL(objectUrl); video.removeAttribute("src"); }
+}
+
+function doAnalyzeFrames(extracted, file){
+  var fd = new FormData();
+  extracted.frames.forEach(function(blob, i){ fd.append("frames", blob, "frame-" + String(i + 1).padStart(2,"0") + ".jpg"); });
+  fd.append("duration", String(extracted.duration));
+  fd.append("filename", file.name);
+  startProgress();
+  return doAnalyzeRequest("/api/analyze-frames", fd, false);
 }
 
 /* 进度：上传阶段显示真实百分比(0→30%)，AI 阶段动画(30%→92%→脉冲) */
@@ -390,10 +438,10 @@ function stopProgress(ok){
 }
 
 /* 用 XHR 上传以显示真实进度；上传完成后进入 AI 阶段动画 */
-function doAnalyze(fd, isUpload){
+function doAnalyzeRequest(path, fd, isUpload){
   return new Promise(function(resolve, reject){
     var xhr = new XMLHttpRequest();
-    xhr.open("POST", API_BASE + "/api/analyze");
+    xhr.open("POST", API_BASE + path);
     xhr.setRequestHeader("X-Access-Code", accessCode);
     if(isUpload && xhr.upload){
       xhr.upload.onprogress = function(e){
@@ -411,15 +459,16 @@ function doAnalyze(fd, isUpload){
     xhr.send(fd);
   });
 }
+function doAnalyze(fd, isUpload){ return doAnalyzeRequest("/api/analyze", fd, isUpload); }
 
 /* 开始解析 */
-$("btnGo").onclick = function(){
+$("btnGo").onclick = async function(){
   hideErr();
   var fd = new FormData();
   var isUpload = currentTab === "upload";
   if(isUpload){
     if(!currentFile){ toast("请先选择一个视频文件"); return; }
-    fd.append("file", currentFile);
+    /* 本地抽帧：原视频不上传，文件大小不再是限制。 */
   } else {
     var u = $("urlInput").value.trim();
     if(!u){ toast("请先粘贴视频链接"); return; }
@@ -427,7 +476,13 @@ $("btnGo").onclick = function(){
   }
   $("btnGo").disabled = true;
   if(isUpload){ startUploadPhase(); } else { startProgress(); }
-  doAnalyze(fd, isUpload)
+  var task;
+  try{
+    task = isUpload ? doAnalyzeFrames(await extractLocalFrames(currentFile), currentFile) : doAnalyze(fd, false);
+  }catch(e){
+    stopProgress(false); $("btnGo").disabled = false; showErr(e.message || "本地抽帧失败"); return;
+  }
+  task
     .then(function(res){
       stopProgress(res.ok);
       $("btnGo").disabled = false;

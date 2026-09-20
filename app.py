@@ -273,8 +273,14 @@ def parse_model_json(text: str) -> dict:
         raise HTTPException(500, "JSON 解析失败，请重试一次")
 
 
-def call_qwen(frames: list, cfg: dict) -> dict:
-    content = [{"type": "text", "text": PROMPT}]
+def call_qwen(frames: list, cfg: dict, duration: float | None = None) -> dict:
+    duration_note = ""
+    if duration and duration > 0:
+        duration_note = (
+            f"\n\n视频总时长约 {int(duration)} 秒；下面 {len(frames)} 张关键帧"
+            "按时间顺序均匀抽取。章节时间请根据总时长与帧序估算。"
+        )
+    content = [{"type": "text", "text": PROMPT + duration_note}]
     for f in frames:
         content.append({"type": "image_url", "image_url": {"url": f}})
     body = {
@@ -331,12 +337,10 @@ async def update_config(
     xhs_cookie: str = Form(""),
     _code: None = Depends(require_code),
 ):
-    # 小红书 Cookie 是「可选」配置，公开部署版也允许用户自己填（放在环境变量里则不可改）
-    if DEPLOY_MODE and os.environ.get("VI_XHS_COOKIE"):
-        raise HTTPException(403, "小红书 Cookie 已由服务端统一配置，无需在页面里填写")
-    if DEPLOY_MODE and not xhs_cookie and not (api_key or model):
-        # 公开部署版：只允许设置小红书 Cookie，不允许动 API Key
-        raise HTTPException(403, "线上版本已由作者统一配置 AI 服务，无需设置 API Key")
+    # 公开部署版绝不接收访客的 API Key 或登录 Cookie。
+    # 这既避免服务端配置被覆盖，也避免诱导用户上传敏感登录凭证。
+    if DEPLOY_MODE:
+        raise HTTPException(403, "公开版已统一配置 AI 服务，不接收访客的 API Key 或 Cookie")
     cfg = load_config()
     if not DEPLOY_MODE:
         if api_key:
@@ -393,7 +397,7 @@ async def analyze(
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
-        analysis = call_qwen(frames, cfg)
+        analysis = call_qwen(frames, cfg, duration)
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
@@ -404,6 +408,48 @@ async def analyze(
         return analysis
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.post("/api/analyze-frames")
+async def analyze_frames(
+    frames: list[UploadFile] = File(...),
+    duration: float = Form(...),
+    filename: str = Form("course-video"),
+    _code: None = Depends(require_code),
+):
+    """长课程专用：视频留在浏览器本地，只接收浏览器均匀抽取的 JPEG 关键帧。"""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置 API Key")
+    if duration <= 0 or duration > 3 * 3600 + 300:
+        raise HTTPException(400, "视频时长需在 3 小时以内")
+    if not 2 <= len(frames) <= 36:
+        raise HTTPException(400, "请上传 2–36 张关键帧")
+
+    encoded: list[str] = []
+    total = 0
+    for frame in frames:
+        raw = await frame.read()
+        total += len(raw)
+        if len(raw) > 2 * 1024 * 1024 or total > 30 * 1024 * 1024:
+            raise HTTPException(400, "关键帧数据过大，请重新选择视频")
+        content_type = (frame.content_type or "").lower()
+        if content_type not in ("image/jpeg", "image/png", "image/webp"):
+            raise HTTPException(400, "关键帧格式不支持")
+        encoded.append(
+            f"data:{content_type};base64," + base64.b64encode(raw).decode("ascii")
+        )
+
+    check_daily_usage()
+    analysis = call_qwen(encoded, cfg, duration)
+    analysis["_meta"] = {
+        "frames": len(encoded),
+        "duration": int(duration),
+        "model": cfg.get("model") or DEFAULT_MODEL,
+        "platform": "本地文件（浏览器抽帧）",
+        "title": Path(filename).name[:120],
+    }
+    return analysis
 
 
 @app.post("/api/resolve-test")
