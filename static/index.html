@@ -123,7 +123,7 @@
     <div class="drop" id="drop">
       <b>点击选择视频文件</b> 或把视频拖拽到这里
       <div class="hint">
-        支持 MP4 / MOV / WebM 等常见视频格式，推荐使用 MP4（H.264）；为获得更稳定、完整的分析效果，建议视频时长不超过 4 小时。<br>
+        支持 MP4 / MOV / WebM 等常见视频格式，推荐使用 MP4（H.264）；为获得更稳定、完整的分析效果，建议视频时长不超过 3 小时。<br>
         为保护隐私，原始视频仅在当前浏览器中读取，不会上传至服务器。系统将按时间均匀提取最多 36 张关键帧用于内容分析，并优先呈现能够从画面中确认的重要信息。视频越长，短暂出现的细节越可能被遗漏；当前报告主要依据视频画面生成，不包含完整音频转写。
       </div>
       <input type="file" id="fileInput" accept="video/*" hidden>
@@ -383,6 +383,7 @@ async function extractLocalFrames(file){
       video.onerror = function(){ reject(new Error("浏览器无法解码该视频，请转为 MP4(H.264) 后重试")); };
     });
     if(!isFinite(video.duration) || video.duration <= 0) throw new Error("无法读取视频时长");
+    if(video.duration > 3 * 3600) throw new Error("视频时长不能超过 3 小时");
     var count = Math.min(LOCAL_FRAME_COUNT, Math.max(6, Math.ceil(video.duration / 300) * 3));
     var canvas = document.createElement("canvas"), ctx = canvas.getContext("2d"), blobs = [];
     var width = Math.min(768, video.videoWidth || 768);

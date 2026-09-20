@@ -80,7 +80,7 @@ except Exception:
     pass
 FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
-MAX_LINK_DURATION = 3 * 3600 + 300
+MAX_LINK_DURATION = 3 * 3600
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
 重要原则：所有结论必须来自关键帧中确实可见的信息。宁可少写，也不要为了凑数量编造、重复或加入无关内容；无法确认的细节要明确说明无法从画面判断。
