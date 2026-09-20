@@ -79,6 +79,7 @@ except Exception:
     pass
 FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
+MAX_LINK_DURATION = 3 * 3600 + 300
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
@@ -260,6 +261,32 @@ def extract_frames(path: str):
     return frames, duration
 
 
+def extract_remote_frames(stream_url: str, duration: float, headers: dict | None = None):
+    """从远程媒体均匀抽帧，不把一至三小时的视频完整下载到服务器。"""
+    if duration <= 0 or duration > MAX_LINK_DURATION:
+        raise HTTPException(400, "视频时长需在 3 小时以内")
+    tmpdir = tempfile.mkdtemp(prefix="vinsight_remote_frames_")
+    files = []
+    try:
+        header_blob = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+        for i in range(MAX_FRAMES):
+            t = duration * (i + 0.5) / MAX_FRAMES
+            out = os.path.join(tmpdir, f"r{i:02d}.jpg")
+            cmd = [FFMPEG, "-y", "-loglevel", "error", "-ss", f"{t:.2f}"]
+            if header_blob:
+                cmd += ["-headers", header_blob]
+            cmd += ["-i", stream_url, "-frames:v", "1",
+                    "-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "5", out]
+            if _run_ffmpeg(cmd, timeout=75) and os.path.exists(out) and os.path.getsize(out) > 1000:
+                files.append(out)
+        if len(files) < 2:
+            raise HTTPException(400, "平台允许读取链接信息，但阻止了远程抽帧；请保存到本地后上传")
+        return ["data:image/jpeg;base64," + base64.b64encode(Path(f).read_bytes()).decode()
+                for f in files]
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def parse_model_json(text: str) -> dict:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -367,6 +394,7 @@ async def analyze(
     tmpdir = tempfile.mkdtemp(prefix="vinsight_video_")
     try:
         platform, title = "本地文件", ""
+        remote_info = None
         if file is not None:
             vpath = os.path.join(tmpdir, file.filename or "video.mp4")
             total = 0
@@ -380,12 +408,21 @@ async def analyze(
                         raise HTTPException(400, "视频超过 500MB，请换一个更小的文件")
                     f.write(chunk)
         elif url and url.strip():
+            remote_info = None
             try:
+                # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
+                remote_info = resolver.resolve_stream_info(url.strip(), tmpdir)
+                platform, title, stream_url, duration, media_headers = remote_info
+                vpath = ""
+            except resolver.ResolveError:
+                remote_info = None
+            try:
+                if remote_info is None:
                 # 支持直接粘贴 App 复制的整段分享文案（自动提取链接，通用平台解析）
-                platform, title, vpath = resolver.download_video(
-                    url.strip(), tmpdir, FFMPEG,
-                    xhs_cookie=cfg.get("xhs_cookie", ""),
-                )
+                    platform, title, vpath = resolver.download_video(
+                        url.strip(), tmpdir, FFMPEG,
+                        xhs_cookie=cfg.get("xhs_cookie", ""),
+                    )
             except resolver.ResolveError as exc:
                 raise HTTPException(400, str(exc))
             except Exception as exc:
@@ -393,7 +430,10 @@ async def analyze(
         else:
             raise HTTPException(400, "请先上传视频文件或粘贴视频链接")
 
-        frames, duration = extract_frames(vpath)
+        if url and url.strip() and remote_info is not None:
+            frames = extract_remote_frames(stream_url, duration, media_headers)
+        else:
+            frames, duration = extract_frames(vpath)
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
@@ -423,6 +463,8 @@ async def analyze_frames(
         raise HTTPException(400, "尚未配置 API Key")
     if duration <= 0:
         raise HTTPException(400, "无法读取视频时长，请换成浏览器可播放的 MP4(H.264) 视频")
+    if duration > MAX_LINK_DURATION:
+        raise HTTPException(400, "视频超过 3 小时，当前只支持 3 小时以内的视频")
     if not 2 <= len(frames) <= 36:
         raise HTTPException(400, "请上传 2–36 张关键帧")
 
@@ -459,6 +501,18 @@ async def resolve_test(url: str = Form(...)):
     tmpdir = tempfile.mkdtemp(prefix="vinsight_dbg_")
     t0 = time.time()
     try:
+        try:
+            platform, title, stream_url, dur, headers = resolver.resolve_stream_info(
+                url.strip(), tmpdir)
+            sample_frames = extract_remote_frames(stream_url, dur, headers)
+            return {
+                "ok": True, "platform": platform, "title": title,
+                "size_mb": 0, "duration": round(dur, 1),
+                "frames": len(sample_frames), "mode": "remote-sparse",
+                "secs": round(time.time() - t0, 1),
+            }
+        except resolver.ResolveError:
+            pass
         platform, title, vpath = resolver.download_video(url.strip(), tmpdir, FFMPEG)
         size = os.path.getsize(vpath) if os.path.exists(vpath) else 0
         dur = get_duration(vpath) if os.path.exists(vpath) else None

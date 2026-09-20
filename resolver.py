@@ -538,6 +538,95 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
     raise ResolveError(_translate_ytdlp_error(last_err or "未知错误"))
 
 
+def resolve_stream_info(text: str, outdir: str):
+    """只解析远程媒体地址和时长，不下载整段视频。
+
+    长课程若先完整下载，会轻易耗尽免费云实例的磁盘/内存。本函数让上层用
+    ffmpeg 在远程媒体的少数时间点稀疏抽帧，传输量从数百 MB 降到几 MB。
+    """
+    url = extract_url(text)
+    if not url:
+        raise ResolveError("没有在输入内容中找到链接")
+    host = urlparse(url).netloc.lower()
+    if "douyin.com" in host or "iesdouyin.com" in host:
+        raise ResolveError("抖音链接需使用抖音专用解析")
+    if "xiaohongshu.com" in host or "xhslink.com" in host:
+        raise ResolveError("小红书链接需使用小红书专用解析")
+    if "vimeo.com" in host:
+        m = (re.search(r"vimeo\.com/(\d+)", url)
+             or re.search(r"player\.vimeo\.com/video/(\d+)", url))
+        if not m:
+            raise ResolveError("无法从 Vimeo 链接中识别视频 ID")
+        vid = m.group(1)
+        hm = re.search(r"vimeo\.com/\d+/([0-9a-f]{6,})", url)
+        api = f"https://player.vimeo.com/video/{vid}/config"
+        if hm:
+            api += f"?h={hm.group(1)}"
+        r = requests.get(api, timeout=25, headers={
+            "User-Agent": DESKTOP_UA, "Referer": "https://vimeo.com/"})
+        if r.status_code != 200:
+            raise ResolveError(f"Vimeo 播放器接口返回 HTTP {r.status_code}")
+        data = r.json()
+        video = data.get("video") or {}
+        progressive = ((data.get("request") or {}).get("files") or {}).get("progressive") or []
+        if not progressive:
+            raise ResolveError("该 Vimeo 视频没有可直接读取的 mp4 源")
+        cands = [p for p in progressive if (p.get("height") or 0) <= 360] or progressive
+        pick = max(cands, key=lambda p: p.get("height") or 0)
+        duration = float(video.get("duration") or 0)
+        if not pick.get("url") or duration <= 0:
+            raise ResolveError("Vimeo 未返回视频直链或时长")
+        return ("Vimeo", (video.get("title") or "")[:80], pick["url"], duration,
+                {"User-Agent": DESKTOP_UA, "Referer": "https://vimeo.com/"})
+    try:
+        import yt_dlp
+    except ImportError:
+        raise ResolveError("服务器未安装 yt-dlp")
+
+    headers = {
+        "User-Agent": DESKTOP_UA,
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    if not urlparse(url).path.lower().endswith(VIDEO_EXTS):
+        headers["Referer"] = f"https://{host}/"
+    if "bilibili" in host:
+        headers["Origin"] = "https://www.bilibili.com"
+    opts = {
+        "quiet": True, "no_warnings": True, "noplaylist": True,
+        "skip_download": True,
+        "format": "bv*[height<=360]/b[height<=360]/bv*/b",
+        "socket_timeout": 30, "retries": 3, "extractor_retries": 3,
+        "http_headers": headers,
+    }
+    cookiefile = _prepare_cookies(url, outdir)
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    impersonate = _impersonate_target(host)
+    if impersonate:
+        opts["impersonate"] = impersonate
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as exc:
+        raise ResolveError(_translate_ytdlp_error(str(exc) or repr(exc)))
+    if info and info.get("entries"):
+        info = next((x for x in info["entries"] if x), None)
+    if not info:
+        raise ResolveError("平台没有返回可播放的视频信息")
+    stream_url = info.get("url")
+    requested = info.get("requested_formats") or []
+    if not stream_url and requested:
+        video_fmt = next((x for x in requested if x.get("vcodec") != "none"), requested[0])
+        stream_url = video_fmt.get("url")
+    duration = float(info.get("duration") or 0)
+    if not stream_url or duration <= 0:
+        raise ResolveError("平台未返回视频直链或时长")
+    merged_headers = dict(headers)
+    merged_headers.update(info.get("http_headers") or {})
+    platform = (info.get("extractor_key") or info.get("extractor") or "在线视频")[:40]
+    return platform, (info.get("title") or "")[:80], stream_url, duration, merged_headers
+
+
 def _translate_ytdlp_error(msg: str) -> str:
     m = msg.lower()
     if "unsupported url" in m:
