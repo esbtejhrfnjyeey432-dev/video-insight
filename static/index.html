@@ -129,11 +129,11 @@
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
-      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 小红书 / 海外公开视频">
+      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 小红书">
     </div>
     <div id="urlHint" style="display:none;font-size:14px;line-height:1.8;color:var(--muted);margin-top:10px">
-      支持 B站、抖音、小红书及常见海外平台的公开视频链接，也可直接粘贴手机 App 生成的分享文案。外文画面信息将自动整理为中文报告。<br>
-      链接解析结果以源平台实际可用状态为准；如暂时无法读取，可使用“上传视频”继续分析。
+      B站公开链接已经过实际解析测试；抖音和小红书会受到平台登录及风控策略影响，部分链接可能无法由云服务器读取。<br>
+      如果链接暂时无法读取，可将视频保存到设备后使用“上传视频”继续分析。
     </div>
     <div class="actions">
       <button class="primary" id="btnGo">开始解析</button>
