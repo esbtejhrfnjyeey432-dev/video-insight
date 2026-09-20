@@ -10,8 +10,8 @@ services:
     plan: free
     region: singapore            # 新加坡节点，访问国内视频平台延迟较低
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /api/health
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    healthCheckPath: /api/ready
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"

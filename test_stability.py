@@ -14,6 +14,12 @@ class StabilityTests(unittest.TestCase):
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
 
+    def test_readiness_reports_all_required_dependencies(self):
+        checks = app.readiness_checks()
+        self.assertEqual(set(checks), {"api_key", "ffmpeg", "static"})
+        self.assertTrue(checks["ffmpeg"])
+        self.assertTrue(checks["static"])
+
     def test_production_api_docs_are_not_exposed(self):
         if app.DEPLOY_MODE:
             self.assertIsNone(app.app.docs_url)

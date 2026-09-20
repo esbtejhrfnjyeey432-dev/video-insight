@@ -10,13 +10,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # video/audio streams downloaded from a source platform.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 appuser
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py resolver.py ./
-COPY static ./static
+COPY --chown=appuser:appuser app.py resolver.py ./
+COPY --chown=appuser:appuser static ./static
+
+USER appuser
 
 EXPOSE 8080
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]

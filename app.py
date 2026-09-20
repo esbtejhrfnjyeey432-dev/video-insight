@@ -24,6 +24,7 @@ import requests
 import imageio_ffmpeg
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import resolver
@@ -77,6 +78,7 @@ def _env_flag(name: str, default: bool) -> bool:
 # 需要「仅授权人可用」时才在部署平台把 VI_PUBLIC 设为 false 并配置 VI_ACCESS_CODE。
 PUBLIC_MODE = _env_flag("VI_PUBLIC", True)
 ENABLE_DEBUG_ENDPOINTS = _env_flag("VI_ENABLE_DEBUG", not DEPLOY_MODE)
+SERVICE_VERSION = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("VI_VERSION", "dev"))[:12]
 
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-plus"
@@ -426,6 +428,26 @@ def health():
     return {"ok": True, "service": "video-insight"}
 
 
+def readiness_checks() -> dict:
+    """Check dependencies required to accept real analysis traffic."""
+    return {
+        "api_key": bool(load_config().get("api_key")),
+        "ffmpeg": bool(FFMPEG and os.path.isfile(FFMPEG)),
+        "static": STATIC_DIR.joinpath("index.html").is_file(),
+    }
+
+
+@app.get("/api/ready")
+def ready():
+    """Deployment readiness: 503 means keep this instance out of traffic."""
+    checks = readiness_checks()
+    ok = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={"ok": ok, "service": "video-insight", "checks": checks},
+    )
+
+
 @app.get("/api/status")
 def status():
     cfg = load_config()
@@ -440,6 +462,7 @@ def status():
         "max_frames": MAX_FRAMES,
         "frame_concurrency": MAX_FRAME_CONCURRENT,
         "link_concurrency": MAX_LINK_CONCURRENT,
+        "version": SERVICE_VERSION,
     }
 
 
@@ -476,6 +499,8 @@ async def analyze(
     _code: None = Depends(require_code),
 ):
     cfg = load_config()
+    if url and len(url) > 4096:
+        raise HTTPException(400, "视频链接过长，请粘贴原始分享链接")
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key：请点右上角「设置」填写阿里百炼 API Key，或先点「演示模式」看效果")
     analysis_slots = await acquire_analysis_slot("link")
