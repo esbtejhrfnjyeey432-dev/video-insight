@@ -83,6 +83,7 @@ MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
 MAX_LINK_DURATION = 3 * 3600 + 300
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
+重要原则：所有结论必须来自关键帧中确实可见的信息。宁可少写，也不要为了凑数量编造、重复或加入无关内容；无法确认的细节要明确说明无法从画面判断。
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
 2. 关键信息提取（核心任务）：逐条提取视频中的关键信息，共 8-12 条，按重要性从高到低排列。覆盖：主题、人物或主体、事件、关键数据、方法步骤、重要结论等，每条一句话，尽量带画面中的具体细节，让没看过视频的人读完就能掌握全部要点；
 3. 章节时间轴：按关键帧先后顺序估算时间点划分章节；
@@ -426,7 +427,9 @@ async def analyze(
                 if duration <= 0:
                     duration = get_duration(stream_url, media_headers) or 0
                 vpath = ""
-            except resolver.ResolveError:
+            except resolver.ResolveError as exc:
+                if "weixin.qq.com/sph/" in url.lower():
+                    raise HTTPException(400, str(exc))
                 remote_info = None
             try:
                 if remote_info is None:
@@ -525,8 +528,10 @@ async def resolve_test(url: str = Form(...)):
                 "frames": len(sample_frames), "mode": "remote-sparse",
                 "secs": round(time.time() - t0, 1),
             }
-        except resolver.ResolveError:
-            pass
+        except resolver.ResolveError as exc:
+            if "weixin.qq.com/sph/" in url.lower():
+                return {"ok": False, "error": str(exc),
+                        "secs": round(time.time() - t0, 1)}
         platform, title, vpath = resolver.download_video(url.strip(), tmpdir, FFMPEG)
         size = os.path.getsize(vpath) if os.path.exists(vpath) else 0
         dur = get_duration(vpath) if os.path.exists(vpath) else None
