@@ -4,6 +4,7 @@ VideoInsight 视频解析工具 · 后端服务
 流程：视频上传/链接下载 -> ffmpeg 抽关键帧 -> 阿里百炼 Qwen-VL 内容理解 -> 结构化分析 + Remix
 """
 import base64
+import concurrent.futures
 import glob
 import hashlib
 import hmac
@@ -269,7 +270,7 @@ def extract_remote_frames(stream_url: str, duration: float, headers: dict | None
     files = []
     try:
         header_blob = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
-        for i in range(MAX_FRAMES):
+        def grab(i: int):
             t = duration * (i + 0.5) / MAX_FRAMES
             out = os.path.join(tmpdir, f"r{i:02d}.jpg")
             cmd = [FFMPEG, "-y", "-loglevel", "error", "-ss", f"{t:.2f}"]
@@ -278,7 +279,12 @@ def extract_remote_frames(stream_url: str, duration: float, headers: dict | None
             cmd += ["-i", stream_url, "-frames:v", "1",
                     "-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "5", out]
             if _run_ffmpeg(cmd, timeout=75) and os.path.exists(out) and os.path.getsize(out) > 1000:
-                files.append(out)
+                return out
+            return None
+        # 免费实例只有约 0.1–0.5 CPU；两路并行能缩短长视频等待，又避免
+        # 6 个 ffmpeg 同时启动造成 512MB 内存实例被系统杀掉。
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            files = [f for f in pool.map(grab, range(MAX_FRAMES)) if f]
         if len(files) < 2:
             raise HTTPException(400, "平台允许读取链接信息，但阻止了远程抽帧；请保存到本地后上传")
         return ["data:image/jpeg;base64," + base64.b64encode(Path(f).read_bytes()).decode()
