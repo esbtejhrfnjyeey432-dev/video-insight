@@ -175,11 +175,15 @@ def save_config(cfg: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def get_duration(path: str):
+def get_duration(path: str, headers: dict | None = None):
     """用 ffmpeg 读取视频时长（imageio-ffmpeg 自带 ffmpeg，无需单独安装）"""
     try:
+        cmd = [FFMPEG, "-hide_banner"]
+        if headers:
+            cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+        cmd += ["-i", path]
         proc = subprocess.run(
-            [FFMPEG, "-hide_banner", "-i", path],
+            cmd,
             capture_output=True, text=True, errors="ignore", timeout=60,
         )
         m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr)
@@ -419,6 +423,8 @@ async def analyze(
                 # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
                 remote_info = resolver.resolve_stream_info(url.strip(), tmpdir)
                 platform, title, stream_url, duration, media_headers = remote_info
+                if duration <= 0:
+                    duration = get_duration(stream_url, media_headers) or 0
                 vpath = ""
             except resolver.ResolveError:
                 remote_info = None
@@ -510,6 +516,8 @@ async def resolve_test(url: str = Form(...)):
         try:
             platform, title, stream_url, dur, headers = resolver.resolve_stream_info(
                 url.strip(), tmpdir)
+            if dur <= 0:
+                dur = get_duration(stream_url, headers) or 0
             sample_frames = extract_remote_frames(stream_url, dur, headers)
             return {
                 "ok": True, "platform": platform, "title": title,

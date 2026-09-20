@@ -122,13 +122,14 @@
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
-      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音">
+      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 视频号">
     </div>
     <div id="urlHint" style="display:none;font-size:13px;color:var(--muted);margin-top:8px">
       手机 App 里点「<b>分享 → 复制链接</b>」，把<b>整段文字</b>直接粘贴进来即可，系统自动提取链接。<br>
       <b>实测支持情况：</b>
       <span style="color:#2b8a3e">B站 ✅</span>（稳定）、
       <span style="color:#2b8a3e">抖音 ✅</span>（须是<b>视频作品</b>的分享链接，用户主页/直播间链接不行）；
+      <span style="color:#2b8a3e">微信视频号</span>（支持 <b>weixin.qq.com/sph/...</b> 分享链接，需服务端配置私有解析器）；
       <span style="color:#e8590c">小红书 ⚠️</span>（公开版不收集登录凭证；请先保存视频，再使用「上传视频」解析）。<br>
       不按视频时长拦截。链接模式会优先取低清晰度版本用于抽帧，节省等待时间；
       抖音等平台可能阻止云服务器读取，遇到这种提示时请保存到本地再用「上传视频」（原视频不会上传）。

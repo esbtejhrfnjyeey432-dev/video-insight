@@ -38,6 +38,24 @@ def _prepare_cookies(url: str, outdir: str):
     返回 cookiefile 路径；拿不到 Cookie 时返回 None，yt-dlp 仍会无 Cookie 重试。
     """
     host = urlparse(url).netloc.lower()
+    if "douyin.com" in host or "iesdouyin.com" in host:
+        manual = os.environ.get("VI_DOUYIN_COOKIE", "").strip()
+        if not manual:
+            return None
+        jar = {}
+        for part in manual.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                jar[k.strip()] = v.strip()
+        if not jar:
+            return None
+        path = os.path.join(outdir, "douyin-cookies.txt")
+        lines = ["# Netscape HTTP Cookie File"]
+        for k, v in jar.items():
+            lines.append(f".douyin.com\tTRUE\t/\tFALSE\t0\t{k}\t{v}")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return path
     if "bilibili" not in host:
         return None
 
@@ -548,8 +566,47 @@ def resolve_stream_info(text: str, outdir: str):
     if not url:
         raise ResolveError("没有在输入内容中找到链接")
     host = urlparse(url).netloc.lower()
+    is_wechat = "weixin.qq.com" in host and "/sph/" in urlparse(url).path
+    if is_wechat:
+        endpoint = os.environ.get("VI_WECHAT_RESOLVER_URL", "").strip()
+        if not endpoint:
+            raise ResolveError(
+                "已识别为视频号链接，但服务端尚未配置私有视频号解析器。"
+                "请在 Render 环境变量配置 VI_WECHAT_RESOLVER_URL"
+            )
+        token = os.environ.get("VI_WECHAT_RESOLVER_TOKEN", "").strip()
+        req_headers = {"Content-Type": "application/json"}
+        if token:
+            req_headers["Authorization"] = "Bearer " + token
+        try:
+            r = requests.post(endpoint, json={"url": url}, headers=req_headers, timeout=45)
+        except Exception as exc:
+            raise ResolveError(f"视频号解析服务连接失败：{exc}")
+        if r.status_code != 200:
+            raise ResolveError(f"视频号解析服务返回 HTTP {r.status_code}")
+        try:
+            payload = r.json()
+        except Exception:
+            raise ResolveError("视频号解析服务返回了无效数据")
+        feed = ((payload.get("data") or {}).get("feedInfo") or payload.get("feedInfo") or {})
+        stream_url = (((feed.get("h264VideoInfo") or {}).get("videoUrl"))
+                      or ((feed.get("h265VideoInfo") or {}).get("videoUrl"))
+                      or feed.get("videoUrl"))
+        if not stream_url or not str(stream_url).startswith("https://"):
+            raise ResolveError("视频号解析服务未返回可用的视频地址")
+        raw_duration = (feed.get("duration") or feed.get("videoDuration")
+                        or feed.get("video_duration") or 0)
+        duration = float(raw_duration or 0)
+        if duration > 100000:
+            duration /= 1000
+        title = (feed.get("description") or feed.get("desc") or "视频号视频")[:80]
+        return ("微信视频号", title, stream_url, duration,
+                {"User-Agent": MOBILE_UA, "Referer": "https://weixin.qq.com/"})
     if "douyin.com" in host or "iesdouyin.com" in host:
-        raise ResolveError("抖音链接需使用抖音专用解析")
+        # 配置了站点 Cookie 时优先交给最新版 yt-dlp；没有 Cookie 才走下方
+        # 专用分享页解析。Cookie 仅来自服务端环境变量，不接收访客输入。
+        if not os.environ.get("VI_DOUYIN_COOKIE", "").strip():
+            raise ResolveError("抖音链接需使用抖音专用解析")
     if "xiaohongshu.com" in host or "xhslink.com" in host:
         raise ResolveError("小红书链接需使用小红书专用解析")
     if "vimeo.com" in host:
