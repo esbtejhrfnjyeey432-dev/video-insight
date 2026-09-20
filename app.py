@@ -4,22 +4,25 @@ VideoInsight 视频解析工具 · 后端服务
 流程：视频上传/链接下载 -> ffmpeg 抽关键帧 -> 阿里百炼 Qwen-VL 内容理解 -> 结构化分析 + Remix
 """
 import base64
+import asyncio
 import concurrent.futures
 import glob
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 import requests
 import imageio_ffmpeg
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +31,8 @@ import resolver
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 STATIC_DIR = BASE_DIR / "static"
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("video-insight")
 
 
 def _pick_ffmpeg() -> str:
@@ -55,6 +60,9 @@ ACCESS_CODE = os.environ.get("VI_ACCESS_CODE", "").strip()
 DEPLOY_MODE = bool(ENV_API_KEY)  # 服务端注入 Key 即视为公开部署模式
 DAILY_LIMIT = int(os.environ.get("VI_DAILY_LIMIT", "20"))  # 部署模式：每天最多解析次数
 _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外泄后被刷爆额度
+MAX_CONCURRENT_ANALYSES = max(1, int(os.environ.get("VI_MAX_CONCURRENT", "1")))
+ANALYSIS_QUEUE_TIMEOUT = max(1, int(os.environ.get("VI_QUEUE_TIMEOUT", "20")))
+_analysis_slots = asyncio.Semaphore(MAX_CONCURRENT_ANALYSES)
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name, "").strip().lower()
@@ -102,6 +110,29 @@ PROMPT = """你是专业的视频内容分析师。我会给你一段视频中�
 若不是教学类视频，teaching.is_teaching 填 false，其余教学字段填空数组或空字符串。"""
 
 app = FastAPI(title="VideoInsight")
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """轻量请求追踪：不记录用户链接、文件名、请求体或任何密钥。"""
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("request_failed id=%s method=%s path=%s",
+                         request_id, request.method, request.url.path)
+        raise
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    logger.info("request id=%s method=%s path=%s status=%s ms=%s",
+                request_id, request.method, request.url.path,
+                response.status_code, elapsed_ms)
+    return response
 
 # ------------------------------------------------------------------
 # 跨域（CORS）：前端页面与后端 API 部署在不同域名时必需。
@@ -154,6 +185,14 @@ async def require_code(x_access_code: str = Header(default="")):
 async def optional_code(x_access_code: str = Header(default="")):
     """带访问码会额外增加配额，不带码也能用（公开分享场景）。"""
     return None
+
+
+async def acquire_analysis_slot():
+    """免费实例内存有限，只允许少量分析并发；忙时快速返回可重试提示。"""
+    try:
+        await asyncio.wait_for(_analysis_slots.acquire(), timeout=ANALYSIS_QUEUE_TIMEOUT)
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(503, "当前有其他视频正在分析，请稍等片刻后重试")
 
 
 def check_daily_usage():
@@ -367,6 +406,12 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
     raise last_err
 
 
+@app.get("/api/health")
+def health():
+    """Render 健康检查专用，不依赖外部模型或视频平台。"""
+    return {"ok": True, "service": "video-insight"}
+
+
 @app.get("/api/status")
 def status():
     cfg = load_config()
@@ -417,6 +462,7 @@ async def analyze(
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key：请点右上角「设置」填写阿里百炼 API Key，或先点「演示模式」看效果")
+    await acquire_analysis_slot()
     tmpdir = tempfile.mkdtemp(prefix="vinsight_video_")
     try:
         platform, title = "本地文件", ""
@@ -437,19 +483,21 @@ async def analyze(
             remote_info = None
             try:
                 # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
-                remote_info = resolver.resolve_stream_info(url.strip(), tmpdir)
+                remote_info = await asyncio.to_thread(
+                    resolver.resolve_stream_info, url.strip(), tmpdir)
                 platform, title, stream_url, duration, media_headers = remote_info
                 if duration <= 0:
-                    duration = get_duration(stream_url, media_headers) or 0
+                    duration = await asyncio.to_thread(
+                        get_duration, stream_url, media_headers) or 0
                 vpath = ""
             except resolver.ResolveError:
                 remote_info = None
             try:
                 if remote_info is None:
                 # 支持直接粘贴 App 复制的整段分享文案（自动提取链接，通用平台解析）
-                    platform, title, vpath = resolver.download_video(
-                        url.strip(), tmpdir, FFMPEG,
-                        xhs_cookie=cfg.get("xhs_cookie", ""),
+                    platform, title, vpath = await asyncio.to_thread(
+                        resolver.download_video, url.strip(), tmpdir, FFMPEG,
+                        cfg.get("xhs_cookie", ""),
                     )
             except resolver.ResolveError as exc:
                 raise HTTPException(400, str(exc))
@@ -459,14 +507,15 @@ async def analyze(
             raise HTTPException(400, "请先上传视频文件或粘贴视频链接")
 
         if url and url.strip() and remote_info is not None:
-            frames = extract_remote_frames(stream_url, duration, media_headers)
+            frames = await asyncio.to_thread(
+                extract_remote_frames, stream_url, duration, media_headers)
         else:
-            frames, duration = extract_frames(vpath)
+            frames, duration = await asyncio.to_thread(extract_frames, vpath)
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
         mode, _ = _analysis_context(mode)
-        analysis = call_qwen(frames, cfg, duration, mode)
+        analysis = await asyncio.to_thread(call_qwen, frames, cfg, duration, mode)
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
@@ -478,6 +527,7 @@ async def analyze(
         return analysis
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        _analysis_slots.release()
 
 
 @app.post("/api/analyze-frames")
@@ -520,17 +570,21 @@ async def analyze_frames(
         # 浏览器通常已按模式控制帧数；服务端再做一次上限保护，防止异常请求放大成本。
         picks = [round(i * (len(encoded) - 1) / (limit - 1)) for i in range(limit)]
         encoded = [encoded[i] for i in picks]
-    check_daily_usage()
-    analysis = call_qwen(encoded, cfg, duration, mode)
-    analysis["_meta"] = {
-        "frames": len(encoded),
-        "duration": int(duration),
-        "model": cfg.get("model") or DEFAULT_MODEL,
-        "platform": "本地文件（浏览器抽帧）",
-        "title": Path(filename).name[:120],
-        "mode": mode,
-    }
-    return analysis
+    await acquire_analysis_slot()
+    try:
+        check_daily_usage()
+        analysis = await asyncio.to_thread(call_qwen, encoded, cfg, duration, mode)
+        analysis["_meta"] = {
+            "frames": len(encoded),
+            "duration": int(duration),
+            "model": cfg.get("model") or DEFAULT_MODEL,
+            "platform": "本地文件（浏览器抽帧）",
+            "title": Path(filename).name[:120],
+            "mode": mode,
+        }
+        return analysis
+    finally:
+        _analysis_slots.release()
 
 
 @app.post("/api/resolve-test")

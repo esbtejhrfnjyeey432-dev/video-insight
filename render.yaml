@@ -11,7 +11,7 @@ services:
     region: singapore            # 新加坡节点，访问国内视频平台延迟较低
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /api/status
+    healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
@@ -30,3 +30,8 @@ services:
         value: "640"
       - key: VI_MAX_VIDEO_MB
         value: "200"
+      # 免费实例保持单任务分析，避免多个 ffmpeg / AI 请求同时触发 OOM
+      - key: VI_MAX_CONCURRENT
+        value: "1"
+      - key: VI_QUEUE_TIMEOUT
+        value: "20"
