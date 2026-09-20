@@ -69,6 +69,42 @@ class StabilityTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_transcript_text_supports_whole_text_and_sentences(self):
+        payload = {
+            "transcripts": [
+                {"text": "第一段完整转写。"},
+                {"sentences": [{"text": "第二段。"}, {"text": "第三段。"}]},
+            ]
+        }
+        self.assertEqual(
+            app._transcript_text(payload),
+            "第一段完整转写。\n第二段。第三段。",
+        )
+
+    def test_remote_asr_submits_polls_and_reads_transcript(self):
+        submitted = mock.Mock(status_code=200)
+        submitted.json.return_value = {"output": {"task_id": "task-1"}}
+        completed = mock.Mock(status_code=200)
+        completed.json.return_value = {
+            "output": {
+                "task_status": "SUCCEEDED",
+                "result": {"transcription_url": "https://example.com/result.json"},
+            }
+        }
+        transcript = mock.Mock(status_code=200)
+        transcript.json.return_value = {
+            "transcripts": [{"sentences": [{"text": "这是语音内容。"}]}]
+        }
+        transcript.raise_for_status.return_value = None
+        with mock.patch("app.requests.post", return_value=submitted) as post, \
+             mock.patch("app.requests.get", side_effect=[completed, transcript]) as get:
+            text = app.transcribe_remote_audio(
+                "https://example.com/video.mp4", {"api_key": "test-key"}, timeout=1)
+        self.assertEqual(text, "这是语音内容。")
+        self.assertEqual(post.call_args.kwargs["json"]["input"]["file_url"],
+                         "https://example.com/video.mp4")
+        self.assertEqual(get.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -178,6 +178,10 @@
       <div class="sec-title">章节时间轴</div>
       <ul class="timeline" id="chapters"></ul>
     </div>
+    <div class="card" id="speechCard" style="display:none">
+      <div class="sec-title">语音内容摘要 <span class="tag">自动转写</span></div>
+      <div class="overall" id="speechSummary"></div>
+    </div>
     <div class="card teach" id="teachCard">
       <div class="sec-title">教学观点提炼 <span class="tag">教育视频专属</span></div>
       <div id="viewpoints"></div>
@@ -203,7 +207,7 @@
     </div>
   </div>
 
-  <footer>VideoInsight · 抽帧 + 多模态大模型内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作</footer>
+  <footer>VideoInsight · 关键帧 + 语音转写 + 多模态内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作</footer>
 </main>
 
 <div class="modal-mask" id="mask">
@@ -572,11 +576,15 @@ function render(a){
   var tags = (a.tags || []).map(function(t){ return '<span class="tagchip">' + esc(t) + "</span>"; }).join(" ");
   var meta = (a._meta || {});
   var t = meta.title ? " · 《" + esc(meta.title.length > 24 ? meta.title.slice(0, 24) + "…" : meta.title) + "》" : "";
-  $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 关键帧 " + (meta.frames || "-") + " 张 · 视频约 " + (meta.duration || 0) + " 秒 · 模型：" + esc(meta.model || "");
+  $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 关键帧 " + (meta.frames || "-") + " 张 · 视频约 " + (meta.duration || 0) + " 秒 · " + esc(meta.speech || "仅画面分析") + " · 模型：" + esc(meta.model || "");
   $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return "<li>" + esc(p) + "</li>"; }).join("");
   $("chapters").innerHTML = (a.chapters || []).map(function(c){
     return '<li><span class="t">' + esc(c.time) + "</span><span>" + esc(c.label) + "</span></li>";
   }).join("") || '<li><span>无</span></li>';
+
+  var speech = (a.speech_summary || "").trim();
+  $("speechCard").style.display = speech ? "block" : "none";
+  $("speechSummary").textContent = speech;
 
   var t = a.teaching || {};
   if(t.is_teaching){
@@ -612,10 +620,12 @@ $("btnExport").onclick = function(){
   md.push("- 标签：" + (a.tags || []).join("、"));
   md.push("- 来源：" + (((a._meta||{}).platform) || "本地文件"));
   md.push("- 时长：约 " + ((a._meta||{}).duration || 0) + " 秒\n");
+  md.push("- 分析方式：" + (((a._meta||{}).speech) || "仅画面分析") + "\n");
   md.push("## 关键信息提取\n");
   (a.key_info || []).forEach(function(p, i){ md.push((i+1) + ". " + p); });
   md.push("\n## 章节时间轴");
   (a.chapters || []).forEach(function(c){ md.push("- " + c.time + " " + c.label); });
+  if(a.speech_summary) md.push("\n## 语音内容摘要\n" + a.speech_summary);
   var t = a.teaching || {};
   if(t.is_teaching){
     md.push("\n## 教学观点提炼");

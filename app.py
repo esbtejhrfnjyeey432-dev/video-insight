@@ -81,6 +81,9 @@ ENABLE_DEBUG_ENDPOINTS = _env_flag("VI_ENABLE_DEBUG", not DEPLOY_MODE)
 SERVICE_VERSION = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("VI_VERSION", "dev"))[:12]
 
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+ASR_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+ASR_MODEL = os.environ.get("VI_ASR_MODEL", "qwen3-asr-flash-filetrans").strip()
 DEFAULT_MODEL = "qwen3-vl-plus"
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
 # 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 6 帧 / 640px）
@@ -95,15 +98,17 @@ FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
 MAX_LINK_DURATION = 3 * 3600
 
-PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
+PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，并可能附带自动语音转写，请完成：
 重要原则：所有结论必须来自关键帧中确实可见的信息。宁可少写，也不要为了凑数量编造、重复或加入无关内容；无法确认的细节要明确说明无法从画面判断。
-外文内容：如果关键帧中包含英文或其他语言，请识别其语言，并将能够确认的标题、字幕和关键信息准确翻译为中文后输出；不要臆测画面之外的语音内容。
+语音原则：只有提供了语音转写时，才可引用口头内容；转写可能有错别字，应结合上下文谨慎归纳。未提供转写时，不得臆测画面之外的语音内容。
+外文内容：如果关键帧或语音转写中包含英文或其他语言，请识别其语言，并将能够确认的标题、字幕和关键信息准确翻译为中文后输出。
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
 2. 关键信息提取（核心任务）：逐条提取视频中的关键信息，共 8-12 条，按重要性从高到低排列。覆盖：主题、人物或主体、事件、关键数据、方法步骤、重要结论等，每条一句话，尽量带画面中的具体细节，让没看过视频的人读完就能掌握全部要点；
 3. 章节时间轴：按关键帧先后顺序估算时间点划分章节；
 4. 如果属于教学/知识类视频，提炼教学观点：核心教学主张、讲解思路、适合人群；
 5. Remix 衍生创作：生成 3-5 张观点卡片（一句话观点+简短说明）、1 个约 60 秒的短视频口播脚本、3 个精华剪辑点（时间+理由）、3 条金句摘录；
-6. 总体总结：综合全部内容写一段 150-250 字的总结，概括视频讲了什么、整体结构如何、核心结论与价值、适合什么人看，作为整份报告的收尾。
+6. 语音内容摘要：提供了语音转写时，用 3-6 句话概括口头讲述的重点；未提供时返回空字符串；
+7. 总体总结：综合全部内容写一段 150-250 字的总结，概括视频讲了什么、整体结构如何、核心结论与价值、适合什么人看，作为整份报告的收尾。
 
 只输出严格的 JSON，不要输出任何其他文字，不要用 markdown 代码块包裹。JSON 结构：
 {"title":"视频标题","category":"视频类型","tags":["标签"],
@@ -111,6 +116,7 @@ PROMPT = """你是专业的视频内容分析师。我会给你一段视频中�
 "chapters":[{"time":"MM:SS","label":"章节名称"}],
 "teaching":{"is_teaching":true,"viewpoints":["教学观点"],"logic":"讲解思路","audience":"适合人群"},
 "remix":{"cards":[{"title":"一句话观点","desc":"简短说明"}],"script":"60秒口播脚本","clips":[{"time":"MM:SS","reason":"剪辑理由"}],"quotes":["金句"]},
+"speech_summary":"语音内容摘要；没有语音转写时为空字符串",
 "overall_summary":"150-250字的总体总结"}
 若不是教学类视频，teaching.is_teaching 填 false，其余教学字段填空数组或空字符串。"""
 
@@ -376,6 +382,103 @@ def parse_model_json(text: str) -> dict:
         raise HTTPException(500, "JSON 解析失败，请重试一次")
 
 
+def _transcript_text(payload: dict) -> str:
+    """从百炼文件转写结果中提取纯文本，兼容整段与逐句两种结构。"""
+    transcripts = payload.get("transcripts") or []
+    parts: list[str] = []
+    for transcript in transcripts:
+        if not isinstance(transcript, dict):
+            continue
+        text = str(transcript.get("text") or "").strip()
+        if text:
+            parts.append(text)
+            continue
+        sentences = transcript.get("sentences") or []
+        sentence_text = "".join(
+            str(item.get("text") or "").strip()
+            for item in sentences if isinstance(item, dict)
+        )
+        if sentence_text:
+            parts.append(sentence_text)
+    return "\n".join(parts).strip()
+
+
+def _compact_transcript(text: str, limit: int = 40000) -> str:
+    """长课程转写可能很大；均匀保留全文片段，避免只留下开头。"""
+    text = re.sub(r"[ \t]+", " ", text or "").strip()
+    if len(text) <= limit:
+        return text
+    blocks = 8
+    width = max(1, limit // blocks)
+    max_start = max(0, len(text) - width)
+    starts = [round(i * max_start / (blocks - 1)) for i in range(blocks)]
+    return "\n……\n".join(text[start:start + width] for start in starts)
+
+
+def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> str:
+    """调用百炼长音频异步转写；失败由上层安全降级为仅画面分析。"""
+    if not media_url or not cfg.get("api_key") or not ASR_MODEL:
+        return ""
+    headers = {
+        "Authorization": "Bearer " + cfg["api_key"],
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+    }
+    response = requests.post(
+        ASR_SUBMIT_URL,
+        headers=headers,
+        json={
+            "model": ASR_MODEL,
+            "input": {"file_url": media_url},
+            "parameters": {"channel_id": [0], "enable_itn": True},
+        },
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"语音转写任务提交失败（HTTP {response.status_code}）")
+    task_id = str((response.json().get("output") or {}).get("task_id") or "")
+    if not task_id:
+        raise RuntimeError("语音转写服务未返回任务编号")
+
+    deadline = time.monotonic() + timeout
+    task_payload: dict = {}
+    while time.monotonic() < deadline:
+        task_response = requests.get(
+            ASR_TASK_URL.format(task_id=task_id),
+            headers={"Authorization": "Bearer " + cfg["api_key"]},
+            timeout=30,
+        )
+        if task_response.status_code != 200:
+            raise RuntimeError(f"查询语音转写任务失败（HTTP {task_response.status_code}）")
+        task_payload = task_response.json()
+        output = task_payload.get("output") or {}
+        status = str(output.get("task_status") or "").upper()
+        if status == "SUCCEEDED":
+            break
+        if status in {"FAILED", "CANCELED", "UNKNOWN"}:
+            raise RuntimeError(str(output.get("message") or "语音转写任务未成功"))
+        time.sleep(2)
+    else:
+        raise RuntimeError("语音转写等待超时")
+
+    output = task_payload.get("output") or {}
+    result = output.get("result") or {}
+    result_url = str(result.get("transcription_url") or "")
+    # 兼容 Qwen-Audio/Fun-ASR 的旧版 results 数组返回结构。
+    results = output.get("results") or []
+    if not result_url:
+        result_url = next((
+            str(item.get("transcription_url") or "")
+            for item in results
+            if isinstance(item, dict) and item.get("transcription_url")
+        ), "")
+    if not result_url.startswith("https://"):
+        raise RuntimeError("语音转写服务未返回有效结果地址")
+    transcript_response = requests.get(result_url, timeout=45)
+    transcript_response.raise_for_status()
+    return _compact_transcript(_transcript_text(transcript_response.json()))
+
+
 ANALYSIS_MODES = {
     "quick": "快速模式：优先速度和成本，只输出最重要、可确认的信息，避免冗长。",
     "standard": "标准模式：兼顾信息覆盖、生成质量、处理速度和成本。",
@@ -387,7 +490,7 @@ def _analysis_context(mode: str) -> tuple[str, str]:
 
 
 def call_qwen(frames: list, cfg: dict, duration: float | None = None,
-              mode: str = "standard") -> dict:
+              mode: str = "standard", transcript: str = "") -> dict:
     duration_note = ""
     if duration and duration > 0:
         duration_note = (
@@ -395,7 +498,13 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
             "按时间顺序均匀抽取。章节时间请根据总时长与帧序估算。"
         )
     mode, context_note = _analysis_context(mode)
-    content = [{"type": "text", "text": PROMPT + duration_note + context_note}]
+    transcript_note = ""
+    if transcript:
+        transcript_note = (
+            "\n\n以下为自动语音转写（可能有识别误差），请与关键帧相互印证：\n"
+            + transcript
+        )
+    content = [{"type": "text", "text": PROMPT + duration_note + context_note + transcript_note}]
     for f in frames:
         content.append({"type": "image_url", "image_url": {"url": f}})
     body = {
@@ -563,16 +672,26 @@ async def analyze(
         else:
             raise HTTPException(400, "请先上传视频文件或粘贴视频链接")
 
+        transcript = ""
+        speech_status = "仅画面分析"
         if url and url.strip() and remote_info is not None:
             frames = await asyncio.to_thread(
                 extract_remote_frames, stream_url, duration, media_headers)
+            try:
+                transcript = await asyncio.to_thread(
+                    transcribe_remote_audio, stream_url, cfg)
+                if transcript:
+                    speech_status = "画面 + 语音转写"
+            except Exception as exc:
+                logger.warning("asr_fallback platform=%s reason=%s", platform, exc)
         else:
             frames, duration = await asyncio.to_thread(extract_frames, vpath)
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
         mode, _ = _analysis_context(mode)
-        analysis = await asyncio.to_thread(call_qwen, frames, cfg, duration, mode)
+        analysis = await asyncio.to_thread(
+            call_qwen, frames, cfg, duration, mode, transcript)
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
@@ -580,6 +699,7 @@ async def analyze(
             "platform": platform,
             "title": title,
             "mode": mode,
+            "speech": speech_status,
         }
         return analysis
     finally:
@@ -638,6 +758,7 @@ async def analyze_frames(
             "platform": "本地文件（浏览器抽帧）",
             "title": Path(filename).name[:120],
             "mode": mode,
+            "speech": "仅画面分析（原视频未上传）",
         }
         return analysis
     finally:
@@ -749,8 +870,9 @@ def analyze_demo(_code: None = Depends(require_code)):
                 "复习的节奏，比复习的时长更重要",
             ],
         },
+        "speech_summary": "讲者指出，被动阅读容易产生已经掌握的错觉，真正有效的学习需要主动回忆。课程进一步说明了间隔重复与费曼技巧的具体使用方法，并建议把三种方法组合成可持续执行的学习闭环。",
         "overall_summary": "这是一节面向「学了就忘」人群的学习方法教学视频。视频先用「书看三遍一合上就忘」的痛点引起共鸣，指出被动阅读只产生熟悉感错觉；随后依次讲解主动回忆（测试效应，记忆提升约 50%）、间隔重复（1/3/7 天节奏对抗遗忘曲线）、费曼技巧（讲给别人听，卡壳即漏洞）三个方法，每个方法都按「原理 + 做法 + 整体结构清晰、节奏紧凑，结论可落地：先回忆、再间隔复习、最后输出讲解。适合备考学生和需要高效自学新知识的职场人，看完即可直接套用到自己的学习流程中。",
-        "_meta": {"frames": 5, "duration": 15, "model": "演示模式（未调用真实大模型）"},
+        "_meta": {"frames": 5, "duration": 15, "model": "演示模式（未调用真实大模型）", "speech": "画面 + 语音转写"},
     }
 
 
