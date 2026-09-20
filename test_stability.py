@@ -14,6 +14,11 @@ class StabilityTests(unittest.TestCase):
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
 
+    def test_production_api_docs_are_not_exposed(self):
+        if app.DEPLOY_MODE:
+            self.assertIsNone(app.app.docs_url)
+            self.assertIsNone(app.app.openapi_url)
+
     def test_analysis_queue_times_out_cleanly(self):
         async def scenario():
             old_timeout = app.ANALYSIS_QUEUE_TIMEOUT

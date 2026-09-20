@@ -112,7 +112,12 @@ PROMPT = """你是专业的视频内容分析师。我会给你一段视频中�
 "overall_summary":"150-250字的总体总结"}
 若不是教学类视频，teaching.is_teaching 填 false，其余教学字段填空数组或空字符串。"""
 
-app = FastAPI(title="VideoInsight")
+app = FastAPI(
+    title="VideoInsight",
+    docs_url=None if DEPLOY_MODE else "/docs",
+    redoc_url=None if DEPLOY_MODE else "/redoc",
+    openapi_url=None if DEPLOY_MODE else "/openapi.json",
+)
 
 
 @app.middleware("http")
@@ -129,7 +134,11 @@ async def request_observability(request: Request, call_next):
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if DEPLOY_MODE:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     logger.info("request id=%s method=%s path=%s status=%s ms=%s",
