@@ -79,7 +79,6 @@ except Exception:
     pass
 FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
-MAX_LINK_DURATION = 3 * 3600 + 300
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
@@ -395,8 +394,6 @@ async def analyze(
             raise HTTPException(400, "请先上传视频文件或粘贴视频链接")
 
         frames, duration = extract_frames(vpath)
-        if duration > MAX_LINK_DURATION:
-            raise HTTPException(400, "视频超过 3 小时，当前只支持 3 小时以内的视频")
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
@@ -424,8 +421,8 @@ async def analyze_frames(
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key")
-    if duration <= 0 or duration > 3 * 3600 + 300:
-        raise HTTPException(400, "视频时长需在 3 小时以内")
+    if duration <= 0:
+        raise HTTPException(400, "无法读取视频时长，请换成浏览器可播放的 MP4(H.264) 视频")
     if not 2 <= len(frames) <= 36:
         raise HTTPException(400, "请上传 2–36 张关键帧")
 
@@ -545,6 +542,18 @@ def analyze_demo(_code: None = Depends(require_code)):
         "overall_summary": "这是一节面向「学了就忘」人群的学习方法教学视频。视频先用「书看三遍一合上就忘」的痛点引起共鸣，指出被动阅读只产生熟悉感错觉；随后依次讲解主动回忆（测试效应，记忆提升约 50%）、间隔重复（1/3/7 天节奏对抗遗忘曲线）、费曼技巧（讲给别人听，卡壳即漏洞）三个方法，每个方法都按「原理 + 做法 + 整体结构清晰、节奏紧凑，结论可落地：先回忆、再间隔复习、最后输出讲解。适合备考学生和需要高效自学新知识的职场人，看完即可直接套用到自己的学习流程中。",
         "_meta": {"frames": 5, "duration": 15, "model": "演示模式（未调用真实大模型）"},
     }
+
+
+@app.middleware("http")
+async def disable_stale_frontend_cache(request, call_next):
+    """前端更新后立即生效，避免浏览器继续显示旧的 95MB 限制页面。"""
+    response = await call_next(request)
+    content_type = (response.headers.get("content-type") or "").lower()
+    if "text/html" in content_type:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

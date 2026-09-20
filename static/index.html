@@ -118,7 +118,7 @@
     </div>
     <div class="drop" id="drop">
       <b>点击选择视频文件</b> 或把视频拖拽到这里
-      <div class="hint">支持 mp4 / mov / webm 等常见格式，最长约 3 小时。长视频会在你的浏览器中抽取 36 张关键帧，<b>原视频不上传</b>，只上传压缩后的画面用于分析。</div>
+      <div class="hint">支持 mp4 / mov / webm 等常见格式，<b>不限制文件大小和视频时长</b>。视频会在你的浏览器中均匀抽取最多 36 张关键帧，<b>原视频不上传</b>，只上传压缩后的画面用于分析。</div>
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
@@ -130,7 +130,7 @@
       <span style="color:#2b8a3e">B站 ✅</span>（稳定）、
       <span style="color:#2b8a3e">抖音 ✅</span>（须是<b>视频作品</b>的分享链接，用户主页/直播间链接不行）；
       <span style="color:#e8590c">小红书 ⚠️</span>（公开版不收集登录凭证；请先保存视频，再使用「上传视频」解析）。<br>
-      支持 3 小时以内的视频。链接模式会优先取低清晰度版本用于抽帧，节省等待时间；
+      不按视频时长拦截。链接模式会优先取低清晰度版本用于抽帧，节省等待时间；
       抖音等平台可能阻止云服务器读取，遇到这种提示时请保存到本地再用「上传视频」（原视频不会上传）。
     </div>
     <div class="actions">
@@ -366,7 +366,6 @@ async function extractLocalFrames(file){
       video.onerror = function(){ reject(new Error("浏览器无法解码该视频，请转为 MP4(H.264) 后重试")); };
     });
     if(!isFinite(video.duration) || video.duration <= 0) throw new Error("无法读取视频时长");
-    if(video.duration > 3 * 3600 + 300) throw new Error("当前支持最长约 3 小时的视频");
     var count = Math.min(LOCAL_FRAME_COUNT, Math.max(6, Math.ceil(video.duration / 300) * 3));
     var canvas = document.createElement("canvas"), ctx = canvas.getContext("2d"), blobs = [];
     var width = Math.min(768, video.videoWidth || 768);
