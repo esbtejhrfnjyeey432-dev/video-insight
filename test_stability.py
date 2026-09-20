@@ -2,10 +2,12 @@
 """不调用外部平台或 AI 的后端稳定性测试。"""
 import asyncio
 import unittest
+from unittest import mock
 
 from fastapi import HTTPException
 
 import app
+import resolver
 
 
 class StabilityTests(unittest.TestCase):
@@ -26,6 +28,24 @@ class StabilityTests(unittest.TestCase):
                 app.ANALYSIS_QUEUE_TIMEOUT = old_timeout
 
         asyncio.run(scenario())
+
+    def test_private_network_urls_are_rejected(self):
+        with self.assertRaises(resolver.ResolveError):
+            resolver.validate_public_url("http://127.0.0.1/admin")
+        with mock.patch("resolver.socket.getaddrinfo", return_value=[
+            (None, None, None, None, ("10.0.0.8", 443)),
+        ]):
+            with self.assertRaises(resolver.ResolveError):
+                resolver.validate_public_url("https://example.com/video")
+
+    def test_public_url_is_allowed(self):
+        with mock.patch("resolver.socket.getaddrinfo", return_value=[
+            (None, None, None, None, ("93.184.216.34", 443)),
+        ]):
+            self.assertEqual(
+                resolver.validate_public_url("https://example.com/video.mp4"),
+                "https://example.com/video.mp4",
+            )
 
     def test_light_and_heavy_jobs_use_separate_pools(self):
         async def scenario():

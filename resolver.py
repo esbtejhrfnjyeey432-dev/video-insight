@@ -8,9 +8,11 @@ resolver.py · 通用视频链接解析下载（粘什么平台的链接都能�
   每一级失败自动降级到下一级，全部失败时给出可操作的中文提示。
 """
 import glob
+import ipaddress
 import json
 import os
 import re
+import socket
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -26,6 +28,26 @@ DESKTOP_UA = (
 
 MAX_VIDEO_BYTES = int(os.environ.get("VI_LINK_MAX_VIDEO_MB", "750")) * 1024 * 1024
 VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi", ".flv", ".ts")
+
+
+def validate_public_url(url: str) -> str:
+    """Reject non-HTTP and private-network targets before server-side fetching."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ResolveError("链接格式不正确，只支持 http 或 https 视频链接")
+    if parsed.username or parsed.password:
+        raise ResolveError("链接中不能包含用户名或密码")
+    host = parsed.hostname.rstrip(".").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        raise ResolveError("不允许访问本机或内网地址")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or 443)}
+    except (OSError, socket.gaierror):
+        raise ResolveError("链接域名无法解析，请检查链接是否完整")
+    for address in addresses:
+        if not ipaddress.ip_address(address).is_global:
+            raise ResolveError("不允许访问本机或内网地址")
+    return url
 
 
 def _prepare_cookies(url: str, outdir: str):
@@ -567,6 +589,7 @@ def resolve_stream_info(text: str, outdir: str):
     url = extract_url(text)
     if not url:
         raise ResolveError("没有在输入内容中找到链接")
+    validate_public_url(url)
     host = urlparse(url).netloc.lower()
     if "douyin.com" in host or "iesdouyin.com" in host:
         # 配置了站点 Cookie 时优先交给最新版 yt-dlp；没有 Cookie 才走下方
@@ -698,6 +721,7 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: 
     url = extract_url(text)
     if not url:
         raise ResolveError("没有在输入内容中找到链接：请粘贴视频链接或 App 里的分享文案")
+    validate_public_url(url)
 
     host = urlparse(url).netloc.lower()
     if "weixin.qq.com" in host and "/sph/" in urlparse(url).path:

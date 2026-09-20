@@ -76,6 +76,7 @@ def _env_flag(name: str, default: bool) -> bool:
 # 公开模式：默认开启（分享链接给任何人都能直接用）。
 # 需要「仅授权人可用」时才在部署平台把 VI_PUBLIC 设为 false 并配置 VI_ACCESS_CODE。
 PUBLIC_MODE = _env_flag("VI_PUBLIC", True)
+ENABLE_DEBUG_ENDPOINTS = _env_flag("VI_ENABLE_DEBUG", not DEPLOY_MODE)
 
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-plus"
@@ -474,7 +475,12 @@ async def analyze(
         platform, title = "本地文件", ""
         remote_info = None
         if file is not None:
-            vpath = os.path.join(tmpdir, file.filename or "video.mp4")
+            # Browser supplied filenames are untrusted and must never become paths.
+            original_name = Path(file.filename or "video.mp4").name
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in {".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi", ".flv", ".ts"}:
+                suffix = ".mp4"
+            vpath = os.path.join(tmpdir, f"upload-{uuid.uuid4().hex}{suffix}")
             total = 0
             with open(vpath, "wb") as f:
                 while True:
@@ -597,6 +603,8 @@ async def analyze_frames(
 async def resolve_test(url: str = Form(...)):
     """调试接口：只做「下载视频」这一步，不调用大模型，用于快速定位链接解析是否成功。
     返回平台 / 标题 / 文件大小 / 视频时长 / 耗时。"""
+    if not ENABLE_DEBUG_ENDPOINTS:
+        raise HTTPException(404, "Not found")
     tmpdir = tempfile.mkdtemp(prefix="vinsight_dbg_")
     t0 = time.time()
     try:
@@ -635,6 +643,8 @@ async def resolve_test(url: str = Form(...)):
 @app.post("/api/probe")
 async def probe(url: str = Form(...)):
     """诊断接口：回传服务端实际抓到的页面结构，用于定位链接解析失败原因。不下载视频。"""
+    if not ENABLE_DEBUG_ENDPOINTS:
+        raise HTTPException(404, "Not found")
     try:
         return {"ok": True, **resolver.probe_url(url.strip())}
     except Exception as exc:

@@ -37,3 +37,6 @@ services:
         value: "1"
       - key: VI_QUEUE_TIMEOUT
         value: "20"
+      # 生产环境关闭内部解析诊断接口，避免被滥用为下载器或网络探针
+      - key: VI_ENABLE_DEBUG
+        value: "false"
