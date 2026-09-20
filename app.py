@@ -79,6 +79,7 @@ except Exception:
     pass
 FRAME_WIDTH = int(os.environ.get("VI_FRAME_WIDTH", "768"))
 MAX_VIDEO_BYTES = int(os.environ.get("VI_MAX_VIDEO_MB", "500")) * 1024 * 1024
+MAX_LINK_DURATION = 3 * 3600 + 300
 
 PROMPT = """你是专业的视频内容分析师。我会给你一段视频中按时间顺序抽取的关键帧画面，请完成：
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
@@ -394,6 +395,8 @@ async def analyze(
             raise HTTPException(400, "请先上传视频文件或粘贴视频链接")
 
         frames, duration = extract_frames(vpath)
+        if duration > MAX_LINK_DURATION:
+            raise HTTPException(400, "视频超过 3 小时，当前只支持 3 小时以内的视频")
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数

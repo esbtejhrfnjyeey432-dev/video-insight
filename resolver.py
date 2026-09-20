@@ -24,7 +24,7 @@ DESKTOP_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-MAX_VIDEO_BYTES = 500 * 1024 * 1024
+MAX_VIDEO_BYTES = int(os.environ.get("VI_LINK_MAX_VIDEO_MB", "750")) * 1024 * 1024
 VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi", ".flv", ".ts")
 
 
@@ -93,6 +93,16 @@ def extract_url(text: str):
 
 
 def _save_stream(resp, dest: str):
+    announced = resp.headers.get("content-length")
+    if announced:
+        try:
+            if int(announced) > MAX_VIDEO_BYTES:
+                raise ResolveError(
+                    f"平台返回的视频约 {int(announced) / 1024 / 1024:.0f}MB，"
+                    "超过在线链接处理上限。请保存到本地后用「上传视频」解析"
+                )
+        except ValueError:
+            pass
     total = 0
     with open(dest, "wb") as f:
         for chunk in resp.iter_content(1 << 20):
@@ -100,13 +110,42 @@ def _save_stream(resp, dest: str):
                 continue
             total += len(chunk)
             if total > MAX_VIDEO_BYTES:
-                raise ResolveError("视频超过 500MB，请换一个更小的视频")
+                raise ResolveError(
+                    f"在线视频超过 {MAX_VIDEO_BYTES // 1024 // 1024}MB。"
+                    "请保存到本地后用「上传视频」解析；本地模式不会上传整段视频"
+                )
             f.write(chunk)
     if total < 200 * 1024:
         raise ResolveError("下载到的文件过小，可能不是视频（链接可能已失效或需要登录）")
 
 
 # ---------------------------------------------------------------- 抖音
+def _find_douyin_item(node):
+    """兼容抖音不断变化的 _ROUTER_DATA 层级，递归寻找作品对象。"""
+    if isinstance(node, dict):
+        if isinstance(node.get("video"), dict) and (
+            node.get("aweme_id") or node.get("awemeId") or node.get("desc")
+        ):
+            return node
+        for key in ("item_list", "aweme_list", "filter_list"):
+            value = node.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    found = _find_douyin_item(item)
+                    if found:
+                        return found
+        for value in node.values():
+            found = _find_douyin_item(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_douyin_item(value)
+            if found:
+                return found
+    return None
+
+
 def resolve_douyin(url: str, dest: str) -> str:
     """走移动端分享页解析（无需登录）。返回视频标题（可能为空）。"""
     s = requests.Session()
@@ -150,12 +189,21 @@ def resolve_douyin(url: str, dest: str) -> str:
         try:
             raw = m2.group(1).replace("undefined", "null")
             data = json.loads(raw)
-            for v in (data.get("loaderData") or {}).values():
-                if isinstance(v, dict) and isinstance(v.get("videoInfoRes"), dict):
-                    items = v["videoInfoRes"].get("item_list") or []
-                    if items:
-                        item = items[0]
-                        break
+            item = _find_douyin_item(data.get("loaderData") or data)
+        except Exception:
+            item = None
+    # 新版分享页会按 IP/风控等级移除 videoInfoRes；旧 iteminfo 接口在部分
+    # 节点仍会返回公开作品，作为无需 Cookie 的第二条路径。
+    if not item:
+        try:
+            r_api = s.get(
+                "https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/",
+                params={"item_ids": vid},
+                headers={"Accept": "application/json", "Referer": final_url},
+                timeout=25,
+            )
+            if r_api.content:
+                item = _find_douyin_item(r_api.json())
         except Exception:
             item = None
     if not item:
@@ -167,7 +215,10 @@ def resolve_douyin(url: str, dest: str) -> str:
     # 无水印直链（社区验证的构造方式）
     uri = play_addr.get("uri")
     if uri:
-        candidates.append(f"https://aweme.snssdk.com/aweme/v1/play/?video_id={uri}&ratio=720p&line=0")
+        # 只做关键帧分析不需要高清源。360p 可将一小时视频缩小数倍，
+        # 显著降低免费云服务器的下载时间、磁盘和内存压力。
+        candidates.append(f"https://aweme.snssdk.com/aweme/v1/play/?video_id={uri}&ratio=360p&line=0")
+        candidates.append(f"https://www.douyin.com/aweme/v1/play/?video_id={uri}&ratio=360p&line=0")
     candidates.extend(play_addr.get("url_list") or [])
 
     last_status = None
@@ -409,8 +460,8 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
             # AI 抽帧宽度就是 640px，360p 的画面信息完全够用。
             # 优先取 360p 能显著降低下载+合并耗时（26 分钟视频 154s → 更快），
             # 也避免 Render 免费版 512MB 内存在合并大文件时 OOM。
-            "format": ("b[height<=360]/bv*[height<=360]+ba/"
-                       "b[height<=480]/bv*[height<=480]+ba/"
+            "format": ("b[height<=240]/bv*[height<=240]+ba/"
+                       "b[height<=360]/bv*[height<=360]+ba/"
                        "b[height<=720]/bv*[height<=720]+ba/b"),
             "merge_output_format": "mp4",
             "quiet": True,
