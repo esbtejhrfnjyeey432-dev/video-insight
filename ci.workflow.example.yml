@@ -19,6 +19,13 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install --requirement requirements.txt
+      - name: Reject committed API keys
+        shell: bash
+        run: |
+          if git grep -qE 'sk-[A-Za-z0-9_-]{20,}' -- ':!README.md'; then
+            echo 'Potential API key detected in tracked files.'
+            exit 1
+          fi
       - run: python -m py_compile app.py resolver.py xhs_api.py xys.py
       - run: python -m unittest test_stability.py
 

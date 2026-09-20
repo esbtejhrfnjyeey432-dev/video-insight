@@ -62,6 +62,10 @@ uvicorn app:app --host 0.0.0.0 --port 8765
 | 访问码校验 | 所有解析接口需携带正确访问码（`hmac.compare_digest` 防时序攻击），只把「链接 + 访问码」发给对方 |
 | 配置接口禁用 | `/api/config` 在部署模式下返回 403，访问者无法替换/窃取 Key |
 | 每日用量限额 | `VI_DAILY_LIMIT`（默认 20 次/天）限制每日真实解析次数，访问码外泄也不会刷爆额度 |
+| 错误信息脱敏 | 不向浏览器返回模型供应商的原始响应正文，也不把 Key、Cookie、请求体或用户链接写入日志 |
+| 仓库防误提交 | `.gitignore` / `.dockerignore` 排除配置、环境变量、证书、Cookie 和 secrets 目录；CI 模板检查疑似 API Key |
+
+如果密钥曾经真实提交到 Git、截图、聊天或公开日志中，仅从文件删除并不安全：应立即在百炼控制台撤销旧 Key、创建新 Key，并只把新 Key 填入 Render 的 Secret 环境变量 `VI_API_KEY`。
 
 ## 后续规划
 

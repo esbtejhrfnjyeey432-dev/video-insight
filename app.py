@@ -229,7 +229,15 @@ def check_daily_usage():
 
 
 def save_config(cfg: dict) -> None:
-    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Atomic replacement avoids a truncated secret file after crashes.  0600
+    # prevents other OS users from reading a locally stored API key on Unix.
+    tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp_path, CONFIG_PATH)
 
 
 def get_duration(path: str, headers: dict | None = None):
@@ -407,10 +415,13 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
                 json=body, timeout=300,
             )
         except Exception as exc:
-            raise HTTPException(502, f"调用大模型失败：{exc}")
+            logger.warning("model_request_failed type=%s", type(exc).__name__)
+            raise HTTPException(502, "大模型服务暂时不可用，请稍后重试")
         if r.status_code != 200:
-            detail = r.text[:300]
-            raise HTTPException(502, f"大模型接口返回 {r.status_code}：{detail}")
+            # Never reflect a provider response body: it may contain internal
+            # request metadata and is not suitable for public clients or logs.
+            logger.warning("model_response_failed status=%s", r.status_code)
+            raise HTTPException(502, f"大模型服务返回异常（HTTP {r.status_code}），请稍后重试")
         msg = r.json()["choices"][0]["message"]
         # content 为空时兜底取 reasoning_content；并剥离思考标签
         text = (msg.get("content") or msg.get("reasoning_content") or "").strip()

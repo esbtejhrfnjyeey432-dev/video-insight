@@ -2,6 +2,15 @@
 __pycache__
 *.pyc
 config.json
+config.json.tmp
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*cookies*.txt
+secrets
 demo-dist
 slides
 slides.txt
