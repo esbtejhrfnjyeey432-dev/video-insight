@@ -84,6 +84,17 @@
   .quotes li{list-style:none;font-size:14px;padding:5px 0 5px 20px;position:relative;color:var(--teal-d)}
   .quotes li::before{content:"「";position:absolute;left:0;top:5px;color:var(--teal)}
   .err{background:#FCEBEB;border:1px solid #F09595;color:#A32D2D;border-radius:10px;padding:12px 16px;font-size:14px;margin-top:14px;display:none}
+  .err button{display:block;margin-top:10px;background:#fff;border-color:#d85b5b;color:#8f2020}
+  .history-list{display:grid;gap:8px}
+  .history-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fafbfc}
+  .history-main{min-width:0;cursor:pointer;flex:1}
+  .history-title{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .history-meta{font-size:12px;color:var(--muted)}
+  .history-item button{padding:5px 9px;font-size:12px}
+  .report-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:10px}
+  [contenteditable="true"]{outline:2px dashed #79aede;outline-offset:3px;border-radius:3px;background:#f8fbff}
+  .timeline .t.clickable{cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+  .video-player{width:100%;max-height:480px;background:#000;border-radius:10px;display:block}
   .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:50;align-items:center;justify-content:center}
   .modal{background:#fff;border-radius:14px;padding:26px;width:92%;max-width:440px}
   .modal h3{font-size:16px;margin-bottom:14px}
@@ -117,6 +128,14 @@
 
 <main>
   <div class="banner" id="noKeyBanner">还没有配置 API Key：可以先点右上角「演示模式」看完整效果；要分析自己的视频，请在「设置」里填入阿里百炼 API Key。</div>
+
+  <div class="card" id="historyCard" style="display:none">
+    <div class="sec-title" style="justify-content:space-between">
+      <span>最近任务 <span class="tag">仅保存在当前浏览器</span></span>
+      <button type="button" id="btnClearHistory" style="padding:5px 10px;font-size:12px">清空</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+  </div>
 
   <div class="card">
     <div class="tabs">
@@ -166,6 +185,10 @@
   </div>
 
   <div id="result">
+    <div class="card" id="videoPlayerCard" style="display:none">
+      <div class="sec-title">原视频定位 <span class="tag">点击章节时间可跳转</span></div>
+      <video id="videoPlayer" class="video-player" controls preload="metadata"></video>
+    </div>
     <div class="card">
       <div class="head-row" id="headRow"></div>
       <div class="meta" id="meta"></div>
@@ -180,7 +203,7 @@
     </div>
     <div class="card" id="speechCard" style="display:none">
       <div class="sec-title">语音内容摘要 <span class="tag">自动转写</span></div>
-      <div class="overall" id="speechSummary"></div>
+      <div class="overall" id="speechSummary" data-editable="1"></div>
     </div>
     <div class="card teach" id="teachCard">
       <div class="sec-title">教学观点提炼 <span class="tag">教育视频专属</span></div>
@@ -192,7 +215,7 @@
       <div class="sec-title">Remix 衍生创作 <span class="tag">二次创作素材</span></div>
       <div class="cards" id="rcards" style="margin-bottom:16px"></div>
       <div class="sec-title" style="font-size:14px">60 秒短视频口播脚本</div>
-      <div class="script" id="script"></div>
+      <div class="script" id="script" data-editable="1"></div>
       <div class="sec-title" style="font-size:14px;margin-top:16px">精华剪辑点建议</div>
       <ul class="clips" id="clips"></ul>
       <div class="sec-title" style="font-size:14px;margin-top:16px">金句摘录</div>
@@ -200,10 +223,13 @@
     </div>
     <div class="card final">
       <div class="sec-title">总体总结 <span class="tag">全片综合</span></div>
-      <div class="overall" id="overallSummary"></div>
+      <div class="overall" id="overallSummary" data-editable="1"></div>
     </div>
-    <div class="card" style="text-align:center">
-      <button id="btnExport">导出 Markdown 报告</button>
+    <div class="card report-actions">
+      <button id="btnEdit">编辑报告</button>
+      <button id="btnExport">导出 Markdown</button>
+      <button id="btnWord">导出 Word</button>
+      <button id="btnPdf">导出 PDF</button>
     </div>
   </div>
 
@@ -262,6 +288,8 @@ var API_BASE = (function(){
 <script>
 var $ = function(id){ return document.getElementById(id); };
 var currentFile = null, currentTab = "upload", lastResult = null, timer = null;
+var activeSourceUrl = "", activeSourceType = "", activeSourceName = "", previewObjectUrl = "";
+var reportEditing = false, activeHistoryId = "", HISTORY_KEY = "vi_recent_tasks_v1", HISTORY_LIMIT = 10;
 var accessCode = localStorage.getItem("vi_code") || "";
 
 /* 带访问码的统一请求封装 */
@@ -285,8 +313,92 @@ function toast(msg){
   var t = $("toast"); t.textContent = msg; t.classList.add("show");
   setTimeout(function(){ t.classList.remove("show"); }, 2600);
 }
-function showErr(msg){ var e = $("errBox"); e.textContent = msg; e.style.display = "block"; }
+function showErr(msg, canRetry){
+  var e = $("errBox"); e.innerHTML = "";
+  var text = document.createElement("div"); text.textContent = msg; e.appendChild(text);
+  if(canRetry){
+    var retry = document.createElement("button"); retry.type = "button";
+    retry.textContent = "重新尝试";
+    retry.onclick = function(){ $("btnGo").click(); };
+    e.appendChild(retry);
+  }
+  e.style.display = "block";
+}
 function hideErr(){ $("errBox").style.display = "none"; }
+
+function friendlyError(detail, status){
+  detail = String(detail || "");
+  var lower = detail.toLowerCase();
+  if(status === 503 || /正在分析|稍等|繁忙/.test(detail)) return "当前分析任务较多，请稍等片刻后重新尝试。";
+  if(status === 429 || /额度|次数|limit/.test(lower)) return "今日分析额度已用完，请稍后再试或联系网站管理员。";
+  if(/登录|cookie|权限|仅自己可见/.test(detail)) return "该视频需要登录或没有公开访问权限，请改用公开视频，或保存到本地后上传。";
+  if(/403|反爬|风控|challenge|阻止/.test(lower)) return "视频平台暂时阻止了云服务器读取，请稍后重试，或保存到本地后上传。";
+  if(/不支持|unsupported|格式/.test(lower)) return "当前链接或视频格式暂不支持，建议使用 MP4（H.264）或更换原始视频链接。";
+  if(/timeout|超时|网络/.test(lower)) return "连接超时或网络不稳定，请检查网络后重新尝试。";
+  return detail || "解析失败，请重新尝试。";
+}
+
+function loadHistory(){
+  try{
+    var items = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    return Array.isArray(items) ? items : [];
+  }catch(e){ return []; }
+}
+function writeHistory(items){
+  try{ localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_LIMIT))); }
+  catch(e){ toast("浏览器存储空间不足，任务记录未保存"); }
+  renderHistory();
+}
+function saveHistory(result, sourceType, sourceUrl, sourceName){
+  if(!result) return "";
+  var items = loadHistory();
+  var copy = JSON.parse(JSON.stringify(result));
+  var id = Date.now() + "-" + Math.random().toString(36).slice(2,7);
+  items.unshift({
+    id: id,
+    createdAt: new Date().toISOString(), sourceType: sourceType || "",
+    sourceUrl: sourceUrl || "", sourceName: sourceName || "", result: copy
+  });
+  writeHistory(items);
+  return id;
+}
+function updateActiveHistory(){
+  if(!activeHistoryId || !lastResult) return;
+  var items = loadHistory(), found = false;
+  items.forEach(function(item){
+    if(item.id === activeHistoryId){ item.result = JSON.parse(JSON.stringify(lastResult)); found = true; }
+  });
+  if(found) writeHistory(items);
+}
+function renderHistory(){
+  var items = loadHistory(), box = $("historyList"); box.innerHTML = "";
+  $("historyCard").style.display = items.length ? "block" : "none";
+  items.forEach(function(item){
+    var row = document.createElement("div"); row.className = "history-item";
+    var main = document.createElement("div"); main.className = "history-main";
+    var title = document.createElement("div"); title.className = "history-title";
+    title.textContent = (item.result && item.result.title) || item.sourceName || "视频分析报告";
+    var meta = document.createElement("div"); meta.className = "history-meta";
+    meta.textContent = new Date(item.createdAt).toLocaleString() + " · " + (item.sourceType === "url" ? "视频链接" : "本地视频");
+    main.appendChild(title); main.appendChild(meta);
+    main.onclick = function(){ restoreHistory(item.id); };
+    var del = document.createElement("button"); del.type = "button"; del.textContent = "删除";
+    del.onclick = function(){ writeHistory(loadHistory().filter(function(x){ return x.id !== item.id; })); };
+    row.appendChild(main); row.appendChild(del); box.appendChild(row);
+  });
+}
+function restoreHistory(id){
+  var item = loadHistory().find(function(x){ return x.id === id; });
+  if(!item || !item.result) return;
+  lastResult = item.result; activeHistoryId = item.id; activeSourceType = item.sourceType || "";
+  activeSourceUrl = item.sourceUrl || ""; activeSourceName = item.sourceName || "";
+  setupVideoPlayer(); render(lastResult);
+  toast("已恢复历史报告");
+}
+$("btnClearHistory").onclick = function(){
+  if(confirm("确定清空当前浏览器中的最近任务吗？")) writeHistory([]);
+};
+renderHistory();
 
 /* 初始化：免费实例会休眠，首次请求时后台正在唤醒服务 → 超时后自动重试 */
 function loadStatus(attempt){
@@ -364,6 +476,41 @@ function setFile(f){
   hideErr();
   currentFile = f;
   $("fileTip").textContent = "已选择：" + f.name + "（" + mb.toFixed(1) + " MB）";
+}
+
+function clearVideoPlayer(){
+  var player = $("videoPlayer"); player.pause(); player.removeAttribute("src"); player.load();
+  if(previewObjectUrl){ URL.revokeObjectURL(previewObjectUrl); previewObjectUrl = ""; }
+  $("videoPlayerCard").style.display = "none";
+}
+function setupVideoPlayer(){
+  clearVideoPlayer();
+  var player = $("videoPlayer"), src = "";
+  if(activeSourceType === "upload" && currentFile && currentFile.name === activeSourceName){
+    previewObjectUrl = URL.createObjectURL(currentFile); src = previewObjectUrl;
+  }else if(activeSourceType === "url" && /^https?:\/\/\S+\.(mp4|mov|webm)(?:[?#]|$)/i.test(activeSourceUrl)){
+    src = activeSourceUrl;
+  }
+  if(src){ player.src = src; $("videoPlayerCard").style.display = "block"; }
+}
+function parseTimecode(value){
+  var parts = String(value || "").trim().split(":").map(Number);
+  if(parts.some(function(n){ return !isFinite(n); })) return 0;
+  if(parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if(parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
+}
+function jumpToChapter(timecode){
+  var player = $("videoPlayer");
+  if(player.src && $("videoPlayerCard").style.display !== "none"){
+    player.currentTime = Math.max(0, parseTimecode(timecode));
+    player.play().catch(function(){});
+    $("videoPlayerCard").scrollIntoView({behavior:"smooth", block:"center"});
+  }else if(activeSourceType === "url" && activeSourceUrl){
+    window.open(activeSourceUrl, "_blank", "noopener");
+  }else{
+    toast("历史报告未保存本地视频，请重新选择原视频后使用跳转");
+  }
 }
 
 var MODE_CONFIG = {
@@ -486,7 +633,7 @@ function doAnalyzeRequest(path, fd, isUpload){
       var j = null;
       try { j = JSON.parse(xhr.responseText); } catch(e){}
       if(xhr.status === 401){ reject(new Error("stop")); return; }
-      resolve({ ok: xhr.status >= 200 && xhr.status < 300, j: j });
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, j: j });
     };
     xhr.onerror = function(){ reject(new Error("网络错误，请重试")); };
     xhr.send(fd);
@@ -497,7 +644,7 @@ function doAnalyze(fd, isUpload){ return doAnalyzeRequest("/api/analyze", fd, is
 function showLinkFallback(message){
   var box = $("linkFallback");
   box.style.display = "block";
-  if(message) showErr(message);
+  if(message) showErr(message, true);
 }
 function hideLinkFallback(){ $("linkFallback").style.display = "none"; }
 $("btnFallbackUpload").onclick = function(){
@@ -509,15 +656,18 @@ $("btnFallbackUpload").onclick = function(){
 $("btnGo").onclick = async function(){
   hideErr();
   hideLinkFallback();
+  activeHistoryId = "";
   var fd = new FormData();
   var isUpload = currentTab === "upload";
   if(isUpload){
     if(!currentFile){ toast("请先选择一个视频文件"); return; }
     /* 本地抽帧：原视频不上传，文件大小不再是限制。 */
+    activeSourceType = "upload"; activeSourceUrl = ""; activeSourceName = currentFile.name;
   } else {
     var u = $("urlInput").value.trim();
     if(!u){ toast("请先粘贴视频链接"); return; }
     fd.append("url", u);
+    activeSourceType = "url"; activeSourceUrl = u; activeSourceName = "";
   }
   fd.append("mode", $("analysisMode").value);
   $("btnGo").disabled = true;
@@ -526,24 +676,28 @@ $("btnGo").onclick = async function(){
   try{
     task = isUpload ? doAnalyzeFrames(await extractLocalFrames(currentFile), currentFile) : doAnalyze(fd, false);
   }catch(e){
-    stopProgress(false); $("btnGo").disabled = false; showErr(e.message || "本地抽帧失败"); return;
+    stopProgress(false); $("btnGo").disabled = false;
+    showErr(friendlyError(e.message || "本地抽帧失败"), true); return;
   }
   task
     .then(function(res){
       stopProgress(res.ok);
       $("btnGo").disabled = false;
       if(!res.ok){
-        var detail = (res.j && res.j.detail) || "解析失败，请重试";
-        if(!isUpload){ showLinkFallback(detail); } else { showErr(detail); }
+        var detail = friendlyError((res.j && res.j.detail) || "解析失败，请重试", res.status);
+        if(!isUpload){ showLinkFallback(detail); } else { showErr(detail, true); }
         return;
       }
       lastResult = res.j;
+      setupVideoPlayer();
       render(res.j);
+      activeHistoryId = saveHistory(res.j, activeSourceType, activeSourceUrl,
+                                    isUpload && currentFile ? currentFile.name : "");
       toast("解析完成");
     })
     .catch(function(e){
       stopProgress(false); $("btnGo").disabled = false;
-      if(e && e.message !== "stop") showErr("网络错误：" + e.message);
+      if(e && e.message !== "stop") showErr(friendlyError(e.message || "网络错误"), true);
     });
 };
 
@@ -561,6 +715,7 @@ $("btnDemo").onclick = function(){
       stopProgress(true);
       $("btnDemo").disabled = false;
       lastResult = j;
+      activeHistoryId = ""; activeSourceType = "demo"; activeSourceUrl = ""; activeSourceName = ""; clearVideoPlayer();
       render(j);
       toast("演示模式：这是内置示例视频的分析结果");
     })
@@ -570,17 +725,21 @@ $("btnDemo").onclick = function(){
 /* 渲染结果 */
 function render(a){
   $("result").style.display = "block";
-  var head = '<span style="font-size:17px;font-weight:700">' + esc(a.title) + "</span>";
+  reportEditing = false; $("btnEdit").textContent = "编辑报告";
+  var head = '<span id="reportTitle" data-editable="1" style="font-size:17px;font-weight:700">' + esc(a.title) + "</span>";
   if(a.category) head += '<span class="chip">' + esc(a.category) + "</span>";
   $("headRow").innerHTML = head;
   var tags = (a.tags || []).map(function(t){ return '<span class="tagchip">' + esc(t) + "</span>"; }).join(" ");
   var meta = (a._meta || {});
   var t = meta.title ? " · 《" + esc(meta.title.length > 24 ? meta.title.slice(0, 24) + "…" : meta.title) + "》" : "";
   $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 关键帧 " + (meta.frames || "-") + " 张 · 视频约 " + (meta.duration || 0) + " 秒 · " + esc(meta.speech || "仅画面分析") + " · 模型：" + esc(meta.model || "");
-  $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return "<li>" + esc(p) + "</li>"; }).join("");
+  $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return '<li data-editable="1">' + esc(p) + "</li>"; }).join("");
   $("chapters").innerHTML = (a.chapters || []).map(function(c){
-    return '<li><span class="t">' + esc(c.time) + "</span><span>" + esc(c.label) + "</span></li>";
+    return '<li><span class="t clickable" data-time="' + esc(c.time) + '">' + esc(c.time) + '</span><span data-editable="1">' + esc(c.label) + "</span></li>";
   }).join("") || '<li><span>无</span></li>';
+  $("chapters").querySelectorAll(".t[data-time]").forEach(function(node){
+    node.onclick = function(){ jumpToChapter(node.dataset.time); };
+  });
 
   var speech = (a.speech_summary || "").trim();
   $("speechCard").style.display = speech ? "block" : "none";
@@ -589,7 +748,7 @@ function render(a){
   var t = a.teaching || {};
   if(t.is_teaching){
     $("teachCard").style.display = "block";
-    $("viewpoints").innerHTML = (t.viewpoints || []).map(function(v){ return '<div class="viewpoint">' + esc(v) + "</div>"; }).join("");
+    $("viewpoints").innerHTML = (t.viewpoints || []).map(function(v){ return '<div class="viewpoint" data-editable="1">' + esc(v) + "</div>"; }).join("");
     $("logic").innerHTML = "<b>讲解思路：</b>" + esc(t.logic || "");
     $("audience").innerHTML = "<b>适合人群：</b>" + esc(t.audience || "");
   } else {
@@ -598,23 +757,57 @@ function render(a){
 
   var r = a.remix || {};
   $("rcards").innerHTML = (r.cards || []).map(function(c){
-    return '<div class="rcard"><h4>' + esc(c.title) + "</h4><p>" + esc(c.desc) + "</p></div>";
+    return '<div class="rcard"><h4 data-editable="1">' + esc(c.title) + '</h4><p data-editable="1">' + esc(c.desc) + "</p></div>";
   }).join("");
   $("script").textContent = r.script || "";
   $("clips").innerHTML = (r.clips || []).map(function(c){
-    return '<li><span class="t">' + esc(c.time) + "</span><span>" + esc(c.reason) + "</span></li>";
+    return '<li><span class="t">' + esc(c.time) + '</span><span data-editable="1">' + esc(c.reason) + "</span></li>";
   }).join("");
-  $("quotes").innerHTML = (r.quotes || []).map(function(q){ return "<li>" + esc(q) + "</li>"; }).join("");
+  $("quotes").innerHTML = (r.quotes || []).map(function(q){ return '<li data-editable="1">' + esc(q) + "</li>"; }).join("");
 
   $("overallSummary").textContent = a.overall_summary || "";
 
   $("result").scrollIntoView({ behavior: "smooth" });
 }
 
-/* 导出 Markdown */
-$("btnExport").onclick = function(){
+function syncReportFromDom(){
+  if(!lastResult) return;
+  lastResult.title = ($("reportTitle") || {}).textContent || lastResult.title;
+  lastResult.key_info = Array.from($("keyInfo").querySelectorAll("li")).map(function(x){ return x.textContent.trim(); });
+  var chapterRows = Array.from($("chapters").querySelectorAll("li"));
+  lastResult.chapters = chapterRows.map(function(row, i){
+    var spans = row.querySelectorAll("span");
+    return {time:(spans[0] ? spans[0].textContent.trim() : ((lastResult.chapters[i]||{}).time || "")),
+            label:(spans[1] ? spans[1].textContent.trim() : "")};
+  });
+  lastResult.speech_summary = $("speechSummary").textContent.trim();
+  var teaching = lastResult.teaching || (lastResult.teaching = {});
+  teaching.viewpoints = Array.from($("viewpoints").querySelectorAll(".viewpoint")).map(function(x){ return x.textContent.trim(); });
+  var remix = lastResult.remix || (lastResult.remix = {});
+  remix.cards = Array.from($("rcards").querySelectorAll(".rcard")).map(function(card){
+    return {title:(card.querySelector("h4")||{}).textContent || "", desc:(card.querySelector("p")||{}).textContent || ""};
+  });
+  remix.script = $("script").textContent.trim();
+  remix.clips = Array.from($("clips").querySelectorAll("li")).map(function(row){
+    var spans = row.querySelectorAll("span"); return {time:spans[0] ? spans[0].textContent.trim() : "", reason:spans[1] ? spans[1].textContent.trim() : ""};
+  });
+  remix.quotes = Array.from($("quotes").querySelectorAll("li")).map(function(x){ return x.textContent.trim(); });
+  lastResult.overall_summary = $("overallSummary").textContent.trim();
+}
+
+$("btnEdit").onclick = function(){
   if(!lastResult){ toast("请先完成一次解析"); return; }
-  var a = lastResult, md = [];
+  reportEditing = !reportEditing;
+  document.querySelectorAll("#result [data-editable]").forEach(function(node){
+    node.setAttribute("contenteditable", reportEditing ? "true" : "false");
+  });
+  this.textContent = reportEditing ? "保存修改" : "编辑报告";
+  if(reportEditing){ toast("现在可以直接修改报告文字"); }
+  else { syncReportFromDom(); updateActiveHistory(); toast("修改已保存"); }
+};
+
+function buildMarkdown(a){
+  var md = [];
   md.push("# " + (a.title || "视频分析报告") + "\n");
   md.push("- 类型：" + (a.category || "-"));
   md.push("- 标签：" + (a.tags || []).join("、"));
@@ -642,12 +835,53 @@ $("btnExport").onclick = function(){
   md.push("\n### 金句摘录");
   (r.quotes || []).forEach(function(q){ md.push("> " + q); });
   if(a.overall_summary) md.push("\n## 总体总结\n" + a.overall_summary);
-  var blob = new Blob([md.join("\n")], { type: "text/markdown;charset=utf-8" });
+  return md.join("\n");
+}
+function safeFilename(title){
+  return String(title || "video-analysis").replace(/[\\/:*?"<>|]/g, "-").slice(0, 60) || "video-analysis";
+}
+function downloadBlob(blob, filename){
   var link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = "video-analysis.md";
+  link.download = filename;
   link.click();
-  URL.revokeObjectURL(link.href);
+  setTimeout(function(){ URL.revokeObjectURL(link.href); }, 1000);
+}
+function reportHtml(a){
+  var t = a.teaching || {}, r = a.remix || {};
+  function list(items){ return "<ol>" + (items||[]).map(function(x){ return "<li>" + esc(x) + "</li>"; }).join("") + "</ol>"; }
+  var html = '<h1>' + esc(a.title || "视频分析报告") + '</h1>';
+  html += '<p><b>类型：</b>' + esc(a.category || "-") + '<br><b>标签：</b>' + esc((a.tags||[]).join("、")) + '</p>';
+  html += '<h2>关键信息提取</h2>' + list(a.key_info);
+  html += '<h2>章节时间轴</h2><ul>' + (a.chapters||[]).map(function(c){ return '<li><b>' + esc(c.time) + '</b> ' + esc(c.label) + '</li>'; }).join("") + '</ul>';
+  if(a.speech_summary) html += '<h2>语音内容摘要</h2><p>' + esc(a.speech_summary) + '</p>';
+  if(t.is_teaching) html += '<h2>教学观点提炼</h2>' + list(t.viewpoints) + '<p><b>讲解思路：</b>' + esc(t.logic||"") + '</p><p><b>适合人群：</b>' + esc(t.audience||"") + '</p>';
+  html += '<h2>Remix 衍生创作</h2>' + (r.cards||[]).map(function(c){ return '<h3>' + esc(c.title) + '</h3><p>' + esc(c.desc) + '</p>'; }).join("");
+  html += '<h3>60 秒口播脚本</h3><p>' + esc(r.script||"").replace(/\n/g,"<br>") + '</p>';
+  html += '<h3>精华剪辑点</h3><ul>' + (r.clips||[]).map(function(c){ return '<li><b>' + esc(c.time) + '</b> ' + esc(c.reason) + '</li>'; }).join("") + '</ul>';
+  html += '<h3>金句摘录</h3>' + list(r.quotes);
+  html += '<h2>总体总结</h2><p>' + esc(a.overall_summary||"") + '</p>';
+  return html;
+}
+
+$("btnExport").onclick = function(){
+  if(!lastResult){ toast("请先完成一次解析"); return; }
+  syncReportFromDom();
+  downloadBlob(new Blob([buildMarkdown(lastResult)], {type:"text/markdown;charset=utf-8"}), safeFilename(lastResult.title) + ".md");
+};
+$("btnWord").onclick = function(){
+  if(!lastResult){ toast("请先完成一次解析"); return; }
+  syncReportFromDom();
+  var doc = '<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Microsoft YaHei,sans-serif;line-height:1.7;padding:36px}h1{color:#0C447C}h2{margin-top:24px;color:#185FA5}li{margin:6px 0}</style></head><body>' + reportHtml(lastResult) + '</body></html>';
+  downloadBlob(new Blob(["\ufeff" + doc], {type:"application/msword"}), safeFilename(lastResult.title) + ".doc");
+};
+$("btnPdf").onclick = function(){
+  if(!lastResult){ toast("请先完成一次解析"); return; }
+  syncReportFromDom();
+  var win = window.open("", "_blank");
+  if(!win){ toast("浏览器阻止了打印窗口，请允许弹窗后重试"); return; }
+  win.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(lastResult.title||"视频分析报告") + '</title><style>body{font-family:Microsoft YaHei,sans-serif;line-height:1.7;max-width:820px;margin:auto;padding:32px}h1{color:#0C447C}h2{color:#185FA5;margin-top:24px}li{margin:6px 0}@media print{body{padding:0}}</style></head><body>' + reportHtml(lastResult) + '</body></html>');
+  win.document.close(); win.focus(); setTimeout(function(){ win.print(); }, 300);
 };
 
 /* 设置弹窗 */
