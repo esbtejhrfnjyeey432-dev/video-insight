@@ -313,14 +313,39 @@ def parse_model_json(text: str) -> dict:
         raise HTTPException(500, "JSON 解析失败，请重试一次")
 
 
-def call_qwen(frames: list, cfg: dict, duration: float | None = None) -> dict:
+ANALYSIS_MODES = {
+    "quick": "快速模式：优先速度和成本，只输出最重要、可确认的信息，避免冗长。",
+    "standard": "标准模式：兼顾信息覆盖、生成质量、处理速度和成本。",
+    "deep": "深度模式：尽量覆盖内容结构、关键细节和可复用的创作素材，但仍不得臆测。",
+}
+SCENE_HINTS = {
+    "auto": "自动判断最合适的视频类型和输出重点。",
+    "course": "这是课程或知识教学场景，重点提炼知识结构、方法步骤、核心观点和适合人群。",
+    "interview": "这是访谈或播客场景，重点区分人物观点、论据、分歧、结论和高价值表达。",
+    "product": "这是产品介绍或演示场景，重点提炼目标用户、痛点、功能、优势、使用步骤和限制。",
+    "social": "这是短视频或内容创作场景，重点提炼开场钩子、核心信息、节奏、金句和可复用选题。",
+}
+
+
+def _analysis_context(mode: str, scene: str) -> tuple[str, str, str]:
+    safe_mode = mode if mode in ANALYSIS_MODES else "standard"
+    safe_scene = scene if scene in SCENE_HINTS else "auto"
+    return safe_mode, safe_scene, (
+        f"\n\n本次分析要求：{ANALYSIS_MODES[safe_mode]}"
+        f"\n用户场景：{SCENE_HINTS[safe_scene]}"
+    )
+
+
+def call_qwen(frames: list, cfg: dict, duration: float | None = None,
+              mode: str = "standard", scene: str = "auto") -> dict:
     duration_note = ""
     if duration and duration > 0:
         duration_note = (
             f"\n\n视频总时长约 {int(duration)} 秒；下面 {len(frames)} 张关键帧"
             "按时间顺序均匀抽取。章节时间请根据总时长与帧序估算。"
         )
-    content = [{"type": "text", "text": PROMPT + duration_note}]
+    mode, scene, context_note = _analysis_context(mode, scene)
+    content = [{"type": "text", "text": PROMPT + duration_note + context_note}]
     for f in frames:
         content.append({"type": "image_url", "image_url": {"url": f}})
     body = {
@@ -399,6 +424,8 @@ async def update_config(
 async def analyze(
     file: UploadFile | None = File(None),
     url: str = Form(None),
+    mode: str = Form("standard"),
+    scene: str = Form("auto"),
     _code: None = Depends(require_code),
 ):
     cfg = load_config()
@@ -452,13 +479,16 @@ async def analyze(
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
-        analysis = call_qwen(frames, cfg, duration)
+        mode, scene, _ = _analysis_context(mode, scene)
+        analysis = call_qwen(frames, cfg, duration, mode, scene)
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
             "model": cfg.get("model") or DEFAULT_MODEL,
             "platform": platform,
             "title": title,
+            "mode": mode,
+            "scene": scene,
         }
         return analysis
     finally:
@@ -470,6 +500,8 @@ async def analyze_frames(
     frames: list[UploadFile] = File(...),
     duration: float = Form(...),
     filename: str = Form("course-video"),
+    mode: str = Form("standard"),
+    scene: str = Form("auto"),
     _code: None = Depends(require_code),
 ):
     """长课程专用：视频留在浏览器本地，只接收浏览器均匀抽取的 JPEG 关键帧。"""
@@ -497,14 +529,23 @@ async def analyze_frames(
             f"data:{content_type};base64," + base64.b64encode(raw).decode("ascii")
         )
 
+    mode, scene, _ = _analysis_context(mode, scene)
+    frame_limits = {"quick": 6, "standard": 12, "deep": 18}
+    limit = frame_limits[mode]
+    if len(encoded) > limit:
+        # 浏览器通常已按模式控制帧数；服务端再做一次上限保护，防止异常请求放大成本。
+        picks = [round(i * (len(encoded) - 1) / (limit - 1)) for i in range(limit)]
+        encoded = [encoded[i] for i in picks]
     check_daily_usage()
-    analysis = call_qwen(encoded, cfg, duration)
+    analysis = call_qwen(encoded, cfg, duration, mode, scene)
     analysis["_meta"] = {
         "frames": len(encoded),
         "duration": int(duration),
         "model": cfg.get("model") or DEFAULT_MODEL,
         "platform": "本地文件（浏览器抽帧）",
         "title": Path(filename).name[:120],
+        "mode": mode,
+        "scene": scene,
     }
     return analysis
 

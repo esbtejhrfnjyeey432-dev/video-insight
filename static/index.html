@@ -36,6 +36,11 @@
   .urlrow{display:none;gap:10px}
   .urlrow input{flex:1;padding:10px 14px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit}
   .urlrow input:focus{outline:none;border-color:var(--blue)}
+  .analysis-options{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 16px}
+  .analysis-options label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  .analysis-options select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit;font-size:14px}
+  .mode-note{grid-column:1/-1;font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 10px}
+  @media(max-width:560px){.analysis-options{grid-template-columns:1fr}.mode-note{grid-column:auto}}
   input:focus{outline:none;border-color:var(--blue)}
   .actions{margin-top:16px;display:flex;align-items:center;gap:12px}
   .actions .tip{font-size:13px;color:var(--muted)}
@@ -129,6 +134,27 @@
     </div>
     <div class="urlrow" id="urlRow">
       <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 小红书">
+    </div>
+    <div class="analysis-options">
+      <div>
+        <label for="analysisMode">分析模式</label>
+        <select id="analysisMode">
+          <option value="quick">快速 · 速度优先</option>
+          <option value="standard" selected>标准 · 推荐</option>
+          <option value="deep">深度 · 信息更完整</option>
+        </select>
+      </div>
+      <div>
+        <label for="analysisScene">使用场景</label>
+        <select id="analysisScene">
+          <option value="auto" selected>自动识别</option>
+          <option value="course">课程 / 知识教学</option>
+          <option value="interview">访谈 / 播客</option>
+          <option value="product">产品介绍 / 演示</option>
+          <option value="social">短视频 / 内容创作</option>
+        </select>
+      </div>
+      <div class="mode-note" id="modeNote">标准模式：本地视频抽取最多 12 张关键帧，兼顾质量、速度与成本，预计约 1～2 分钟。</div>
     </div>
     <div id="urlHint" style="display:none;font-size:14px;line-height:1.8;color:var(--muted);margin-top:10px">
       B站、抖音和小红书链接都可能受到平台登录、内容权限及风控策略影响，部分链接可能无法由云服务器读取。<br>
@@ -347,7 +373,12 @@ function setFile(f){
   $("fileTip").textContent = "已选择：" + f.name + "（" + mb.toFixed(1) + " MB）";
 }
 
-var LOCAL_FRAME_COUNT = 36;
+var MODE_CONFIG = {
+  quick:{frames:6, text:"快速模式：最多 6 张关键帧，适合先看重点，预计约 30～60 秒。"},
+  standard:{frames:12, text:"标准模式：本地视频抽取最多 12 张关键帧，兼顾质量、速度与成本，预计约 1～2 分钟。"},
+  deep:{frames:18, text:"深度模式：最多 18 张关键帧，适合长课程和重要内容，预计约 2～4 分钟。"}
+};
+$("analysisMode").onchange = function(){ $("modeNote").textContent = MODE_CONFIG[this.value].text; };
 function seekVideo(video, time){
   return new Promise(function(resolve, reject){
     var done = function(){ cleanup(); resolve(); };
@@ -373,7 +404,8 @@ async function extractLocalFrames(file){
     });
     if(!isFinite(video.duration) || video.duration <= 0) throw new Error("无法读取视频时长");
     if(video.duration > 3 * 3600) throw new Error("视频时长不能超过 3 小时");
-    var count = Math.min(LOCAL_FRAME_COUNT, Math.max(6, Math.ceil(video.duration / 300) * 3));
+    var frameCap = MODE_CONFIG[$("analysisMode").value].frames;
+    var count = Math.min(frameCap, Math.max(4, Math.ceil(video.duration / 300) * 2));
     var canvas = document.createElement("canvas"), ctx = canvas.getContext("2d"), blobs = [];
     var width = Math.min(768, video.videoWidth || 768);
     canvas.width = width; canvas.height = Math.max(2, Math.round(width * (video.videoHeight || 432) / (video.videoWidth || 768)));
@@ -393,6 +425,8 @@ function doAnalyzeFrames(extracted, file){
   extracted.frames.forEach(function(blob, i){ fd.append("frames", blob, "frame-" + String(i + 1).padStart(2,"0") + ".jpg"); });
   fd.append("duration", String(extracted.duration));
   fd.append("filename", file.name);
+  fd.append("mode", $("analysisMode").value);
+  fd.append("scene", $("analysisScene").value);
   startProgress();
   return doAnalyzeRequest("/api/analyze-frames", fd, false);
 }
@@ -493,6 +527,8 @@ $("btnGo").onclick = async function(){
     if(!u){ toast("请先粘贴视频链接"); return; }
     fd.append("url", u);
   }
+  fd.append("mode", $("analysisMode").value);
+  fd.append("scene", $("analysisScene").value);
   $("btnGo").disabled = true;
   if(isUpload){ startUploadPhase(); } else { startProgress(); }
   var task;
