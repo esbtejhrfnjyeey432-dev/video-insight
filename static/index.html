@@ -112,6 +112,7 @@
   .link-fallback b{display:block;color:#3f2d0e;font-size:15px;margin-bottom:4px}
   .link-fallback button{margin-top:10px;border:0;border-radius:8px;padding:10px 16px;background:#1769aa;color:#fff;font:inherit;cursor:pointer}
   footer{text-align:center;color:var(--muted);font-size:12px;padding:10px 0 18px}
+  .capacity-note{max-width:760px;margin:0 auto 8px;line-height:1.7;color:#59636e}
   .use-cases{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin:0 auto 20px}
   .use-cases h2{font-size:16px;margin-bottom:4px}
   .use-cases .intro{font-size:13px;color:var(--muted);margin-bottom:14px}
@@ -238,7 +239,10 @@
     </div>
   </div>
 
-  <footer>VideoInsight · 关键帧 + 语音转写 + 多模态内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作</footer>
+  <footer>
+    <div class="capacity-note">并发能力说明：当前版本最多支持 4 个本地视频分析任务同时处理；链接解析任务按顺序处理。超出当前处理能力的任务将进入短时等待队列，轮到后自动开始；如等待时间较长，系统会提示稍后重试。</div>
+    VideoInsight · 关键帧 + 语音转写 + 多模态内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作
+  </footer>
   <section class="use-cases" aria-labelledby="useCasesTitle">
     <h2 id="useCasesTitle">适用场景</h2>
     <p class="intro">适合需要快速了解视频结构、整理可见与可读取内容，以及继续加工文字素材的场景。</p>
