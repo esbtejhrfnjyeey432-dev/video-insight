@@ -111,7 +111,16 @@
   .link-fallback{display:none;margin-top:14px;padding:16px;border:1px solid #f1d49a;background:#fffaf0;border-radius:10px;color:#5f4518;font-size:14px;line-height:1.7}
   .link-fallback b{display:block;color:#3f2d0e;font-size:15px;margin-bottom:4px}
   .link-fallback button{margin-top:10px;border:0;border-radius:8px;padding:10px 16px;background:#1769aa;color:#fff;font:inherit;cursor:pointer}
-  footer{text-align:center;color:var(--muted);font-size:12px;padding:10px 0 30px}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:10px 0 18px}
+  .use-cases{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin:0 auto 20px}
+  .use-cases h2{font-size:16px;margin-bottom:4px}
+  .use-cases .intro{font-size:13px;color:var(--muted);margin-bottom:14px}
+  .use-case-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .use-case{background:#f8fafc;border:1px solid #edf0f3;border-radius:9px;padding:12px 14px}
+  .use-case h3{font-size:14px;color:var(--blue-d);margin-bottom:3px}
+  .use-case p{font-size:12.5px;color:var(--muted);line-height:1.65}
+  .use-case-note{font-size:12px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+  @media(max-width:600px){.use-case-grid{grid-template-columns:1fr}.use-cases{padding:18px}}
 </style>
 <script>window.VI_API_BASE = "https://video-insight-9q9i.onrender.com";</script>
 </head>
@@ -230,6 +239,17 @@
   </div>
 
   <footer>VideoInsight · 关键帧 + 语音转写 + 多模态内容理解 · 关键信息提取 / 总体总结 / Remix 衍生创作</footer>
+  <section class="use-cases" aria-labelledby="useCasesTitle">
+    <h2 id="useCasesTitle">适用场景</h2>
+    <p class="intro">适合需要快速了解视频结构、整理可见与可读取内容，以及继续加工文字素材的场景。</p>
+    <div class="use-case-grid">
+      <div class="use-case"><h3>课程与讲座复盘</h3><p>提取关键信息、章节时间轴和总体总结，辅助回顾较长内容。</p></div>
+      <div class="use-case"><h3>产品演示与操作教程</h3><p>整理画面中可见的界面、字幕、操作步骤和产品信息。</p></div>
+      <div class="use-case"><h3>访谈与播客整理</h3><p>在线视频音轨可读取时结合语音转写；无法读取时自动按画面分析。</p></div>
+      <div class="use-case"><h3>内容整理与二次创作</h3><p>将分析结果整理为观点卡片、口播脚本和金句，并导出报告。</p></div>
+    </div>
+    <p class="use-case-note">结果依据抽取的关键帧及可用的语音转写生成；重要信息建议结合原视频核对。</p>
+  </section>
 </main>
 
 <div class="modal-mask" id="mask">
