@@ -493,6 +493,18 @@ def _analysis_context(mode: str) -> tuple[str, str]:
     return safe_mode, f"\n\n本次分析要求：{ANALYSIS_MODES[safe_mode]}"
 
 
+RETRYABLE_MODEL_STATUS = {408, 429, 500, 502, 503, 504}
+
+
+def _model_retry_delay(response, attempt: int) -> float:
+    """Honor Retry-After when present, otherwise use bounded exponential backoff."""
+    retry_after = (response.headers.get("Retry-After", "") if response is not None else "")
+    try:
+        return min(8.0, max(0.25, float(retry_after)))
+    except (TypeError, ValueError):
+        return min(8.0, 0.75 * (2 ** attempt))
+
+
 def call_qwen(frames: list, cfg: dict, duration: float | None = None,
               mode: str = "standard", transcript: str = "") -> dict:
     duration_note = ""
@@ -528,12 +540,20 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
                 json=body, timeout=300,
             )
         except Exception as exc:
-            logger.warning("model_request_failed type=%s", type(exc).__name__)
+            logger.warning("model_request_failed attempt=%s type=%s", attempt + 1,
+                           type(exc).__name__)
+            if attempt < 2:
+                time.sleep(_model_retry_delay(None, attempt))
+                continue
             raise HTTPException(502, "大模型服务暂时不可用，请稍后重试")
         if r.status_code != 200:
             # Never reflect a provider response body: it may contain internal
             # request metadata and is not suitable for public clients or logs.
-            logger.warning("model_response_failed status=%s", r.status_code)
+            logger.warning("model_response_failed attempt=%s status=%s",
+                           attempt + 1, r.status_code)
+            if r.status_code in RETRYABLE_MODEL_STATUS and attempt < 2:
+                time.sleep(_model_retry_delay(r, attempt))
+                continue
             raise HTTPException(502, f"大模型服务返回异常（HTTP {r.status_code}），请稍后重试")
         msg = r.json()["choices"][0]["message"]
         # content 为空时兜底取 reasoning_content；并剥离思考标签
@@ -543,6 +563,8 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
             return parse_model_json(text)
         except HTTPException as exc:
             last_err = exc
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
     raise last_err
 
 

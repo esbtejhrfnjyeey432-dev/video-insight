@@ -58,6 +58,29 @@ class StabilityTests(unittest.TestCase):
                 "https://example.com/video.mp4",
             )
 
+    def test_model_retries_transient_statuses_then_succeeds(self):
+        overloaded = mock.Mock(status_code=503, headers={})
+        limited = mock.Mock(status_code=429, headers={"Retry-After": "0.25"})
+        success = mock.Mock(status_code=200, headers={})
+        success.json.return_value = {
+            "choices": [{"message": {"content": '{"title":"恢复成功"}'}}]
+        }
+        with mock.patch("app.requests.post", side_effect=[overloaded, limited, success]) as post, \
+             mock.patch("app.time.sleep") as sleep:
+            result = app.call_qwen([], {"api_key": "test-key"})
+        self.assertEqual(result["title"], "恢复成功")
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_model_does_not_retry_permanent_client_error(self):
+        rejected = mock.Mock(status_code=400, headers={})
+        with mock.patch("app.requests.post", return_value=rejected) as post, \
+             mock.patch("app.time.sleep") as sleep:
+            with self.assertRaises(HTTPException):
+                app.call_qwen([], {"api_key": "test-key"})
+        self.assertEqual(post.call_count, 1)
+        sleep.assert_not_called()
+
     def test_light_and_heavy_jobs_use_separate_pools(self):
         async def scenario():
             link_slot = await app.acquire_analysis_slot("link")
