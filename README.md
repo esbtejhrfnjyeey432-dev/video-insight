@@ -73,6 +73,8 @@ uvicorn app:app --host 0.0.0.0 --port 8765
 
 如果密钥曾经真实提交到 Git、截图、聊天或公开日志中，仅从文件删除并不安全：应立即在百炼控制台撤销旧 Key、创建新 Key，并只把新 Key 填入 Render 的 Secret 环境变量 `VI_API_KEY`。
 
+需要把源码发给别人时，不要直接压缩整个工作目录。运行 `powershell -ExecutionPolicy Bypass -File scripts/build-safe-release.ps1` 生成安全源码包；它只包含已提交文件，不会带入本地配置、Cookie、下载视频、日志或 Git 历史。
+
 ## 后续规划
 
 - 音轨转写（ASR）补充语音内容理解
