@@ -144,7 +144,7 @@
   .use-case p{font-size:12.5px;color:var(--muted);line-height:1.65}
   .use-case-note{font-size:12px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
   .workbench{border-color:#b9d5ef;background:linear-gradient(180deg,#fff,#f7fbff)}
-  .work-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:12px 0 18px}
+  .work-steps{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:12px 0 18px}
   .work-step{padding:9px 6px;border:1px solid var(--line);border-radius:8px;text-align:center;font-size:12px;background:#fff;color:var(--muted)}
   .work-step.ready{border-color:#83b6e3;background:var(--blue-l);color:var(--blue-d);font-weight:700}
   .work-panel{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}
@@ -208,9 +208,9 @@
       <div>
         <label for="analysisMode">分析模式</label>
         <select id="analysisMode">
-          <option value="quick">快速（6帧）</option>
-          <option value="standard" selected>标准（18帧）</option>
-          <option value="deep">深度（最多36帧）</option>
+          <option value="quick">快速</option>
+          <option value="standard" selected>标准</option>
+          <option value="deep">深度</option>
         </select>
       </div>
       <div class="mode-note" id="modeNote">标准模式：本地视频抽取最多 18 张关键帧，兼顾质量、速度与成本，预计约 1～3 分钟。</div>
@@ -219,7 +219,7 @@
         <div class="scenario-grid">
           <label class="scenario-option">
             <input type="radio" name="scenario" value="creative">
-            <span class="scenario-box"><b>内容整理与二次创作</b><span>多时长脚本、精彩片段、金句、分镜、小红书与口播文案</span></span>
+            <span class="scenario-box"><b>内容整理与二次创作</b><span>多人对白校准、剧情理解、裂变脚本、连续分镜组与视频提示词</span></span>
           </label>
           <label class="scenario-option">
             <input type="radio" name="scenario" value="course" checked>
@@ -287,25 +287,32 @@
     <div class="card workbench" id="creativeWorkbench" style="display:none">
       <div class="sec-title">电商短剧再创作工作台 <span class="tag">二次创作模式</span></div>
       <div class="work-steps">
-        <div class="work-step ready">01 原片拆解</div><div class="work-step">02 人物与产品</div>
+        <div class="work-step ready">01 原片理解</div><div class="work-step">02 创作资产</div>
         <div class="work-step">03 新脚本</div><div class="work-step">04 分镜方案</div><div class="work-step">05 视频提示词</div>
+        <div class="work-step">06 智能成片</div>
       </div>
       <div class="privacy-line">深度拆解需临时上传原视频：FFmpeg 在应用后端提取镜头和音轨，音轨交由百炼识别台词；任务结束后立即删除临时文件。基础解析仍保持仅上传关键帧。</div>
       <div class="creative-failure" id="creativeFailure"><b id="creativeFailureTitle">本步骤未完成</b><p id="creativeFailureReason"></p><p id="creativeFailureAction"></p><div class="work-actions"><button id="btnCreativeRetry">重新尝试</button><button class="primary" id="btnCreativeFallback">使用兜底结果继续</button></div></div>
       <div class="work-panel">
-        <h3>01 / 拆解原片</h3>
-        <p>识别镜头切换点、关键帧和带起止时间的台词，形成后续可复用的短句拆解包。暂支持 30 分钟、300MB 以内本地视频。</p>
+        <h3>01 / 原片理解与多人对白校准</h3>
+        <p>可选上传 SRT；系统优先采用字幕时间轴，否则调用语音模型。说话人没有可靠证据时会标记“待确认”，并分析核心人物、关系、场景、剧情单元、情绪变化、产品出现时间和前三秒吸引力。</p>
+        <div class="asset-toolbar"><label>＋ 可选 SRT 字幕<input id="subtitleFile" type="file" accept=".srt,application/x-subrip"></label></div>
         <div class="work-actions"><button class="primary" id="btnDeconstruct">开始深度拆解</button><span class="tip" id="deconstructStatus"></span></div>
+        <div class="work-output" id="understandingOutput"></div>
         <div class="shot-grid" id="deconstructShots"></div>
       </div>
       <div class="work-panel">
-        <h3>02 / 上传替换素材</h3>
-        <p>可上传多个人物和产品参考图；不参与本轮的素材可以隐藏，也可以删除。</p>
+        <h3>02 / 准备人物、产品与场景资产</h3>
+        <p>可为同一人物上传不同剧情阶段的造型图，也可加入产品图和新场景参考图；不参与本轮的素材可以隐藏。</p>
         <div class="asset-toolbar">
           <label>＋ 添加人物图<input id="personAssets" type="file" accept="image/*" multiple></label>
           <label>＋ 添加产品图<input id="productAssets" type="file" accept="image/*" multiple></label>
+          <label>＋ 添加场景图<input id="sceneAssets" type="file" accept="image/*" multiple></label>
         </div>
         <div class="asset-grid" id="assetGrid"></div>
+        <div class="field"><label for="targetTotalDuration">新视频目标时长</label><select id="targetTotalDuration"><option value="60">1 分钟</option><option value="120" selected>2 分钟</option><option value="180">3 分钟</option><option value="240">4 分钟</option><option value="300">5 分钟</option><option value="360">6 分钟</option><option value="420">7 分钟</option></select></div>
+        <div class="asset-toolbar"><label><input type="checkbox" id="varyProduct" checked> 换产品</label><label><input type="checkbox" id="varyScene"> 换场景</label><label><input type="checkbox" id="varyPerson"> 换人物</label><label><input type="checkbox" id="varyConflict"> 换冲突模式</label></div>
+        <textarea class="work-textarea" id="referenceScript" placeholder="可选：粘贴已经验证过的成熟创意脚本。系统只参考结构，不照抄原文。"></textarea>
         <textarea class="work-textarea" id="creativeRequirements" placeholder="描述本次改编要求，例如：把原片中的人物替换为上传的三位角色，把原产品替换为新产品，保留快节奏反转结构，台词更生活化。"></textarea>
         <div class="work-actions"><button id="btnVoiceRequirement">语音输入要求</button><button class="primary" id="btnNewScript">识别素材并生成新脚本</button></div>
       </div>
@@ -315,9 +322,9 @@
         <div class="work-actions"><button class="primary" id="btnStoryboard">生成分镜改造方案</button></div>
       </div>
       <div class="work-panel" id="storyboardPanel" style="display:none">
-        <h3>04 / 分镜改造方案</h3><p>逐镜头给出素材引用、画面替换方法和生图提示词；当前版本输出可执行方案，不会伪装成已生成图片。</p>
+        <h3>04 / 连续分镜组与九宫格方案</h3><p>按目标模型单段时长自动拆组，不使用固定“18 帧”。每组给出前后连续的景别变化、人物/服装/场景/产品引用和九宫格提示词；这里只生成可执行方案，不伪装成已生成图片。</p>
         <div class="work-output" id="storyboardOutput"></div>
-        <div class="work-actions"><select id="targetDuration"><option value="10">单段 10 秒</option><option value="15" selected>单段 15 秒</option><option value="30">单段 30 秒</option></select><button class="primary" id="btnVideoPrompts">生成视频提示词</button></div>
+        <div class="work-actions"><select id="targetDuration"><option value="10">模型单段 10 秒</option><option value="15" selected>模型单段 15 秒</option><option value="30">模型单段 30 秒</option></select><button class="primary" id="btnVideoPrompts">生成视频提示词</button></div>
       </div>
       <div class="work-panel" id="promptPanel" style="display:none">
         <h3>05 / 视频提示词包</h3><p>系统会按分镜顺序将连续镜头组合成所选时长，供后续视频生成工具继续使用。</p>
@@ -653,7 +660,13 @@ var MODE_CONFIG = {
   standard:{frames:18, text:"标准模式：本地视频抽取最多 18 张关键帧，兼顾质量、速度与成本，预计约 1～3 分钟。"},
   deep:{frames:36, text:"深度模式：根据视频时长抽取最多 36 张关键帧，适合长课程和重要内容，预计约 3～6 分钟。"}
 };
-$("analysisMode").onchange = function(){ $("modeNote").textContent = MODE_CONFIG[this.value].text; };
+function refreshModeCopy(){
+  var mode=MODE_CONFIG[$("analysisMode").value];
+  $("modeNote").textContent=selectedScenario()==="creative"
+    ? "二创模式：该档位只控制原片理解的取样密度；后续分镜数量由剧情单元、目标总时长和模型单段时长自动决定。"
+    : mode.text;
+}
+$("analysisMode").onchange = refreshModeCopy;
 function selectedScenario(){
   var node = document.querySelector('input[name="scenario"]:checked');
   return node ? node.value : "course";
@@ -662,7 +675,8 @@ document.querySelectorAll('input[name="scenario"]').forEach(function(node){
   node.onchange = function(){
     $("scenarioHint").textContent = selectedScenario() === "course"
       ? "解析完成后将自动生成课程大纲、PPT课件和讲师备注。"
-      : "解析完成后将自动生成多时长脚本、精彩片段、分镜和平台文案。";
+      : "解析完成后可继续做多人对白校准、剧情理解、裂变脚本和连续分镜组。";
+    refreshModeCopy();
   };
 });
 function seekVideo(video, time){
@@ -1004,20 +1018,30 @@ function renderDeconstruction(data){
       '<div class="shot-body"><div class="shot-time">镜头 '+esc(shot.shot)+' · '+secondsLabel(shot.start)+'–'+secondsLabel(shot.end)+'</div>'+
       '<div class="shot-dialogue">'+esc(shot.dialogue || "（此镜头未识别到台词）")+'</div></div></div>';
   }).join("");
-  $("deconstructStatus").textContent = shots.length + " 个镜头 · " + ((data.transcript||[]).length) + " 条带时间台词" + (data.warning ? " · "+data.warning : "");
+  var u=data.understanding||{},cal=u.speaker_calibration||[],unknown=cal.filter(function(x){return x.speaker==="待确认"||Number(x.confidence)<.6;}).length;
+  var people=(u.characters||[]).map(function(x){return '<li><b>'+esc(x.name||x.id||"人物")+'</b> · '+esc(x.identity||"")+' · '+esc(x.personality||"")+' · '+esc(x.appearance||"")+'</li>';}).join("");
+  var relations=(u.relationships||[]).map(function(x){return '<li>'+esc(x.from||"")+' → '+esc(x.to||"")+'：'+esc(x.relationship||"")+'；变化：'+esc(x.changes||"无")+'</li>';}).join("");
+  var scenes=(u.scenes||[]).map(function(x){return '<li>'+esc(x.time_range||"")+' · '+esc(x.name||"场景")+' · 道具：'+esc((x.props||[]).join("、"))+'</li>';}).join("");
+  var units=(u.story_units||[]).map(function(x){var emotions=(x.emotion_changes||[]).map(function(e){return (e.character||"")+" "+(e.from||"")+"→"+(e.to||"")+"（"+(e.cause||"")+"）";}).join("；");return '<li><b>单元 '+esc(x.unit)+'</b> '+esc(x.time_range||"")+' · '+esc(x.summary||"")+'；情绪：'+esc(emotions||"未识别")+'；承接：'+esc(x.transition||"待补充")+'</li>';}).join("");
+  var products=(u.product_placements||[]).map(function(x){return '<li>'+esc(x.time_range||"")+' · '+esc(x.product||"产品")+' · '+esc(x.method||"")+' · '+esc(x.plot_function||"")+'</li>';}).join("");
+  var speakers=cal.slice(0,200).map(function(x,i){return '<tr><td>'+secondsLabel((Number(x.start_ms)||0)/1000)+'–'+secondsLabel((Number(x.end_ms)||0)/1000)+'</td><td contenteditable="true" data-speaker-i="'+i+'">'+esc(x.speaker||"待确认")+'</td><td>'+esc(x.text||"")+'</td><td>'+esc(Math.round((Number(x.confidence)||0)*100))+"% · "+esc(x.evidence||"")+'</td></tr>';}).join("");
+  var appeal=u.appeal_logic||{};
+  $("understandingOutput").innerHTML=(people||units||products||speakers)?'<h4>原片结构理解</h4><p><b>说话人校准：</b>'+cal.length+' 条，'+unknown+' 条需要人工确认。人物列可直接修改。</p><table><thead><tr><th>时间</th><th>人物</th><th>台词</th><th>置信度/依据</th></tr></thead><tbody>'+speakers+'</tbody></table><h4>吸引力逻辑</h4><p><b>前三秒：</b>'+esc(appeal.first_3_seconds||"证据不足")+'<br><b>核心冲突：</b>'+esc(appeal.conflict||"证据不足")+'<br><b>节奏：</b>'+esc(appeal.pace||"证据不足")+'<br><b>为什么有效：</b>'+esc(appeal.why_it_works||"证据不足")+'</p><h4>核心人物</h4><ul>'+people+'</ul><h4>人物关系</h4><ul>'+relations+'</ul><h4>故事场景</h4><ul>'+scenes+'</ul><h4>剧情单元与情绪</h4><ul>'+units+'</ul><h4>产品出现</h4><ul>'+products+'</ul>':'';
+  document.querySelectorAll("[data-speaker-i]").forEach(function(node){node.onblur=function(){var item=((creativeWorkspace.deconstruction||{}).understanding||{}).speaker_calibration||[];if(item[Number(node.dataset.speakerI)])item[Number(node.dataset.speakerI)].speaker=node.textContent.trim()||"待确认";};});
+  $("deconstructStatus").textContent = shots.length + " 个镜头 · " + ((data.transcript||[]).length) + " 条带时间台词 · 来源 "+(data.transcript_source==="srt"?"SRT":"语音模型") + (data.warning ? " · "+data.warning : "");
   if(data.warning)showCreativeWarning(data.warning);else hideCreativeFailure();
   setWorkbenchStep(2);
 }
 $("btnDeconstruct").onclick = function(){
   if(!currentFile){ toast("请先在上方选择本地原视频"); return; }
   if(selectedScenario() !== "creative"){ toast("请先选择“内容整理与二次创作”场景"); return; }
-  var btn = this, fd = new FormData(); fd.append("file", currentFile, currentFile.name);
-  btn.disabled = true; btn.textContent = "正在拆解…"; $("deconstructStatus").textContent = "上传并调用 FFmpeg 识别镜头，随后转写台词，请勿刷新…";
+  var btn = this, fd = new FormData(); fd.append("file", currentFile, currentFile.name);var sub=$("subtitleFile").files[0];if(sub)fd.append("subtitle",sub,sub.name);
+  btn.disabled = true; btn.textContent = "正在理解…"; $("deconstructStatus").textContent = "正在识别镜头、校准多人对白并分析剧情结构，请勿刷新…";
   api("/api/creative/deconstruct", {method:"POST", body:fd})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
     .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast("原片拆解完成"); })
     .catch(function(e){ $("deconstructStatus").textContent = "深度拆解未完成"; showCreativeFailure("deconstruct",e); toast("拆解失败，已显示原因和兜底方式"); })
-    .finally(function(){ btn.disabled=false; btn.textContent="重新拆解原片"; });
+    .finally(function(){ btn.disabled=false; btn.textContent="重新理解原片"; });
 };
 
 function compressAsset(file){
@@ -1040,7 +1064,7 @@ async function addAssets(files, type){
   for(var i=0;i<files.length && creativeWorkspace.assets.length<12;i++){
     try{
       var image=await compressAsset(files[i]);
-      creativeWorkspace.assets.push({id:"asset-"+Date.now()+"-"+i,type:type,name:(type==="person"?"人物 ":"产品 ")+(creativeWorkspace.assets.filter(function(x){return x.type===type;}).length+1),image:image,hidden:false});
+      var prefix={person:"人物 ",product:"产品 ",scene:"场景 "}[type]||"素材 ";creativeWorkspace.assets.push({id:"asset-"+Date.now()+"-"+i,type:type,name:prefix+(creativeWorkspace.assets.filter(function(x){return x.type===type;}).length+1),image:image,hidden:false});
     }catch(e){ toast(e.message); }
   }
   renderAssets(); setWorkbenchStep(creativeWorkspace.assets.length ? 2 : 1);
@@ -1056,6 +1080,7 @@ function renderAssets(){
 }
 $("personAssets").onchange=function(){ addAssets(this.files,"person"); this.value=""; };
 $("productAssets").onchange=function(){ addAssets(this.files,"product"); this.value=""; };
+$("sceneAssets").onchange=function(){ addAssets(this.files,"scene"); this.value=""; };
 $("btnVoiceRequirement").onclick=function(){
   var Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!Recognition){ toast("当前浏览器不支持语音输入，请直接键入要求"); return; }
@@ -1067,7 +1092,7 @@ $("btnVoiceRequirement").onclick=function(){
 };
 function workbenchPayload(phase){
   return {phase:phase, analysis:lastResult||{}, deconstruction:creativeWorkspace.deconstruction||{}, assets:creativeWorkspace.assets,
-    requirements:$("creativeRequirements").value.trim(), script:creativeWorkspace.script||{}, storyboard:creativeWorkspace.storyboard||[], target_duration:Number($("targetDuration").value)};
+    requirements:$("creativeRequirements").value.trim(),reference_script:$("referenceScript").value.trim(),script:creativeWorkspace.script||{},storyboard:creativeWorkspace.storyboard||[],target_duration:Number($("targetDuration").value),target_total_seconds:Number($("targetTotalDuration").value),variation:{product:$("varyProduct").checked,scene:$("varyScene").checked,person:$("varyPerson").checked,conflict:$("varyConflict").checked}};
 }
 function callWorkbench(phase, button){
   button.disabled=true; var old=button.textContent; button.textContent="AI 生成中…";
@@ -1095,6 +1120,7 @@ function fallbackStoryboard(){
 }
 function fallbackPrompts(){
   var target=Number($("targetDuration").value)||15,source=creativeWorkspace.storyboard||[],groups=[],current=[],used=0;
+  if(source.some(function(x){return x.panels&&x.panels.length;})){creativeWorkspace.prompts=source.map(function(x,i){return {group:x.group||i+1,source_groups:[x.group||i+1],duration:Number(x.duration)||target,asset_ids:x.asset_ids||[],speakers:(x.panels||[]).map(function(p){return p.speaker;}).filter(Boolean),voice_status:"missing",prompt:(x.grid_prompt||"")+"；"+(x.panels||[]).map(function(p){return (p.shot_size||"")+" "+(p.visual||"")+" "+(p.dialogue||"");}).join("；")};});renderVideoPrompts(creativeWorkspace.prompts);hideCreativeFailure();toast("已按分镜组生成本地兜底提示词");return;}
   source.forEach(function(x,i){var scriptRows=(((creativeWorkspace.script||{}).script||{}).shots||[]),row=scriptRows[i]||{},length=Math.max(.5,(Number(row.end)||0)-(Number(row.start)||0));if(current.length&&used+length>target){groups.push(current);current=[];used=0;}current.push({board:x,row:row});used+=length;});if(current.length)groups.push(current);
   var rows=groups.map(function(items,i){return {group:i+1,start_shot:items[0].board.shot,end_shot:items[items.length-1].board.shot,duration:Math.min(target,Math.round(items.reduce(function(n,x){return n+Math.max(.5,(Number(x.row.end)||0)-(Number(x.row.start)||0));},0))),prompt:items.map(function(x){return "镜头"+x.board.shot+"："+(x.board.image_prompt||x.board.edit_plan||"");}).join("；")+"。保持人物、产品和光线连续，按镜头顺序自然转场。"};});
   creativeWorkspace.prompts=rows;renderVideoPrompts(rows);hideCreativeFailure();toast("已按时长生成本地兜底提示词");
@@ -1103,10 +1129,11 @@ $("btnCreativeRetry").onclick=function(){var map={deconstruct:"btnDeconstruct",s
 $("btnCreativeFallback").onclick=function(){var map={deconstruct:fallbackDeconstruction,script:fallbackScript,storyboard:fallbackStoryboard,prompts:fallbackPrompts},fn=map[creativeFailedStage];if(fn)fn();};
 function renderNewScript(data){
   var script=data.script||{}, rows=script.shots||[];
-  var profiles=(data.role_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"人物")+'：</b>'+esc(x.appearance||"")+'；'+esc(x.wardrobe||"")+'</p>';}).join("")+
+  var profiles=(data.role_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"人物")+'：</b>'+esc(x.identity||"")+'；'+esc(x.personality||"")+'；'+esc(x.appearance||"")+'；造型：'+esc((x.wardrobe_by_unit||[]).map(function(w){return (w.unit||"")+" "+(w.wardrobe||"");}).join(" / ")||x.wardrobe||"")+'</p>';}).join("")+
     (data.product_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"产品")+'：</b>'+esc(x.features||"")+'</p>';}).join("");
-  var table='<h4>'+esc(script.title||"新短剧脚本")+'</h4><p>'+esc(script.creative_angle||"")+'</p>'+profiles+'<table><thead><tr><th>镜头</th><th>时间</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
-    rows.map(function(x,i){return '<tr><td>'+esc(x.shot||i+1)+'</td><td>'+esc(x.start)+'–'+esc(x.end)+'s</td><td contenteditable="true" data-script-field="shot_type" data-script-i="'+i+'">'+esc(x.shot_type||"")+'</td><td contenteditable="true" data-script-field="visual" data-script-i="'+i+'">'+esc(x.visual||"")+'</td><td contenteditable="true" data-script-field="dialogue" data-script-i="'+i+'">'+esc(x.dialogue||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td></tr>';}).join("")+'</tbody></table>';
+  var units=(script.story_units||[]).map(function(x){return '<p><b>剧情单元 '+esc(x.unit)+'：</b>'+esc(x.purpose||"")+'；承接：'+esc(x.transition||"")+'；产品植入：'+esc(x.product_placement||"无")+'</p>';}).join("");
+  var table='<h4>'+esc(script.title||"新短剧脚本")+' · '+esc(script.target_seconds||$("targetTotalDuration").value)+' 秒</h4><p>'+esc(script.creative_angle||"")+'</p>'+profiles+units+'<table><thead><tr><th>镜头</th><th>时间</th><th>人物/情绪</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
+    rows.map(function(x,i){return '<tr><td>'+esc(x.shot||i+1)+'</td><td>'+esc(x.start)+'–'+esc(x.end)+'s</td><td>'+esc((x.speaker||"")+(x.emotion?" · "+x.emotion:""))+'</td><td contenteditable="true" data-script-field="shot_type" data-script-i="'+i+'">'+esc(x.shot_type||"")+'</td><td contenteditable="true" data-script-field="visual" data-script-i="'+i+'">'+esc(x.visual||"")+'</td><td contenteditable="true" data-script-field="dialogue" data-script-i="'+i+'">'+esc(x.dialogue||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td></tr>';}).join("")+'</tbody></table>';
   $("scriptOutput").innerHTML=table; $("scriptPanel").style.display="block"; setWorkbenchStep(3); $("scriptPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
 function syncWorkbenchScript(){
@@ -1118,12 +1145,12 @@ $("btnNewScript").onclick=function(){
   var btn=this; callWorkbench("script",btn).then(function(j){creativeWorkspace.script=j;hideCreativeFailure();renderNewScript(j);toast("新脚本已生成，可直接修改");}).catch(function(e){showCreativeFailure("script",e);toast("脚本生成失败，已有内容不会丢失");});
 };
 function renderStoryboard(rows){
-  $("storyboardOutput").innerHTML='<table><thead><tr><th>镜头</th><th>时间</th><th>素材</th><th>具体改造方案</th><th>分镜生图提示词</th></tr></thead><tbody>'+rows.map(function(x){return '<tr><td>'+esc(x.shot)+'</td><td>'+esc(x.time||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td><td>'+esc(x.edit_plan||"")+'</td><td>'+esc(x.image_prompt||"")+'</td></tr>';}).join("")+'</tbody></table>';
+  $("storyboardOutput").innerHTML='<table><thead><tr><th>分镜组</th><th>时间</th><th>素材</th><th>连续性</th><th>九宫格规划</th></tr></thead><tbody>'+rows.map(function(x){var panels=(x.panels||[]).map(function(p){return p.panel+". "+(p.shot_size||"")+" "+(p.visual||"")+" "+(p.emotion_action||"");}).join("；");return '<tr><td>第 '+esc(x.group||x.shot)+' 组</td><td>'+esc(x.time||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td><td>'+esc((x.continuity_in||"")+" → "+(x.continuity_out||""))+'</td><td>'+esc(panels||x.grid_prompt||x.image_prompt||"")+'</td></tr>';}).join("")+'</tbody></table>';
   $("storyboardPanel").style.display="block";setWorkbenchStep(4);$("storyboardPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("btnStoryboard").onclick=function(){syncWorkbenchScript();var btn=this;callWorkbench("storyboard",btn).then(function(j){creativeWorkspace.storyboard=j.storyboard||[];hideCreativeFailure();renderStoryboard(creativeWorkspace.storyboard);toast("分镜改造方案已生成");}).catch(function(e){showCreativeFailure("storyboard",e);toast("分镜生成失败，新脚本已经保留");});};
 function renderVideoPrompts(rows){
-  $("promptOutput").innerHTML=(rows||[]).map(function(x){return '<div class="agent-box" style="margin-bottom:8px"><h3>第 '+esc(x.group)+' 组 · 镜头 '+esc(x.start_shot)+'–'+esc(x.end_shot)+' · '+esc(x.duration)+' 秒</h3><p class="agent-text">'+esc(x.prompt||"")+'</p></div>';}).join("");
+  $("promptOutput").innerHTML=(rows||[]).map(function(x){var range=x.source_groups&&x.source_groups.length?"来源分镜组 "+x.source_groups.join("、"):"镜头 "+(x.start_shot||"")+"–"+(x.end_shot||"");return '<div class="agent-box" style="margin-bottom:8px"><h3>第 '+esc(x.group)+' 组 · '+esc(range)+' · '+esc(x.duration)+' 秒</h3><p><b>人物声音：</b>'+esc(x.voice_status==="ready"?"已具备":"尚缺真实人物音频")+'</p><p class="agent-text">'+esc(x.prompt||"")+'</p></div>';}).join("");
   $("promptPanel").style.display="block";setWorkbenchStep(5);$("promptPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("btnVideoPrompts").onclick=function(){var btn=this;callWorkbench("prompts",btn).then(function(j){creativeWorkspace.prompts=j.video_prompts||[];hideCreativeFailure();renderVideoPrompts(creativeWorkspace.prompts);toast("视频提示词包已生成");}).catch(function(e){showCreativeFailure("prompts",e);toast("提示词生成失败，脚本和分镜已经保留");});};
@@ -1133,7 +1160,7 @@ function pollBuilderTask(videoId){
     $("builderStatus").textContent="二创任务："+(stateText[task.state]||task.state)+(task.message?" · "+task.message:"");
     if(task.state==="pending"||task.state==="building") setTimeout(function(){pollBuilderTask(videoId);},2500);
     if(task.state==="failed") toast((task.error&&task.error.reason)||"成片未完成，原有二创结果已保留");
-    if(task.state==="ready") toast("二创成片已完成");
+    if(task.state==="ready"){setWorkbenchStep(6);toast("二创成片已完成");}
   }).catch(function(e){$("builderStatus").textContent="状态查询失败，原有结果不受影响";toast(friendlyError(e.message||String(e),503));});
 }
 $("btnBuildRemix").onclick=function(){

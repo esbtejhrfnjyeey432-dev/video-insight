@@ -61,7 +61,8 @@ assert(context.reportHtml(sample).includes("语音内容摘要"),
   "Word/PDF export missed speech summary");
 
 for (const id of ["historyCard", "btnClearHistory", "videoPlayer", "btnEdit", "btnWord", "btnPdf",
-  "creativeFailure", "btnCreativeRetry", "btnCreativeFallback"]) {
+  "creativeFailure", "btnCreativeRetry", "btnCreativeFallback", "subtitleFile",
+  "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript"]) {
   assert(html.includes('id="' + id + '"'), "Missing UI control: " + id);
 }
 

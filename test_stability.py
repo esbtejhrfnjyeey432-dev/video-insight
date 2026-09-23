@@ -12,6 +12,16 @@ import resolver
 
 
 class StabilityTests(unittest.TestCase):
+    def test_srt_parser_preserves_time_and_explicit_speaker(self):
+        rows = app._parse_srt("1\n00:00:01,000 --> 00:00:03,200\n小知：别再手抄笔记了\n\n2\n00:00:04,000 --> 00:00:05,000\n没有人物名\n".encode())
+        self.assertEqual(rows[0]["speaker"], "小知")
+        self.assertEqual(rows[0]["start_ms"], 1000)
+        self.assertEqual(rows[1]["speaker"], "待校准")
+
+    def test_creative_quality_rejects_empty_storyboard(self):
+        with self.assertRaises(app.HTTPException):
+            app._validate_creative_phase("storyboard", {"storyboard": []})
+
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
 

@@ -511,7 +511,10 @@ def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 30
                 end = max(begin, int(sentence.get("end_time") or begin))
             except (TypeError, ValueError):
                 continue
-            segments.append({"start_ms": begin, "end_ms": end, "text": text})
+            speaker = str(sentence.get("speaker_id") or sentence.get("speaker") or "").strip()
+            segments.append({"start_ms": begin, "end_ms": end, "text": text,
+                             "speaker": speaker or "待校准",
+                             "speaker_source": "asr" if speaker else "unknown"})
     return {
         "text": _compact_transcript(_transcript_text(payload)),
         "segments": segments[:2000],
@@ -521,6 +524,90 @@ def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 30
 def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> str:
     """兼容原有分析流程，仅返回转写正文。"""
     return transcribe_remote_audio_details(media_url, cfg, timeout).get("text", "")
+
+
+def _parse_srt(content: bytes) -> list[dict]:
+    """解析用户提供的 SRT；只信任时间和文字，人物名缺失时明确待校准。"""
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(413, "SRT 文件不能超过 2MB")
+    text = content.decode("utf-8-sig", errors="replace").replace("\r\n", "\n")
+    clock = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})")
+    segments: list[dict] = []
+    for block in re.split(r"\n\s*\n", text):
+        match = clock.search(block)
+        if not match:
+            continue
+        values = [int(value) for value in match.groups()]
+        start = ((values[0] * 60 + values[1]) * 60 + values[2]) * 1000 + values[3]
+        end = ((values[4] * 60 + values[5]) * 60 + values[6]) * 1000 + values[7]
+        lines = [re.sub(r"<[^>]+>", "", line).strip() for line in block[match.end():].splitlines() if line.strip()]
+        body = " ".join(lines).strip()
+        if not body:
+            continue
+        named = re.match(r"^([\w\u4e00-\u9fff·]{1,16})[：:]\s*(.+)$", body)
+        segments.append({"start_ms": start, "end_ms": max(start, end),
+                         "text": named.group(2) if named else body,
+                         "speaker": named.group(1) if named else "待校准",
+                         "speaker_source": "srt" if named else "unknown"})
+    return segments[:3000]
+
+
+def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict) -> dict:
+    compact = [{k: item.get(k) for k in ("start_ms", "end_ms", "speaker", "text")}
+               for item in transcript[:1200]]
+    prompt = """你是短剧情原片分析导演。结合按时间排列的关键帧和字幕，完成可核验的结构化理解。不得凭声音猜人物身份；说话人证据不足时 speaker 写“待确认”并降低 confidence。只输出 JSON：
+{"speaker_calibration":[{"start_ms":0,"end_ms":1000,"speaker":"人物A/旁白/待确认","text":"","confidence":0.0,"evidence":"画面口型/SRT标注/仅上下文推断"}],
+"characters":[{"id":"char-1","name":"人物A","identity":"","personality":"","appearance":"","wardrobe_by_unit":[{"unit":"剧情单元1","wardrobe":""}]}],
+"relationships":[{"from":"char-1","to":"char-2","relationship":"","changes":""}],
+"scenes":[{"name":"","time_range":"","props":[]}],
+"story_units":[{"unit":1,"time_range":"","summary":"","characters":[],"emotion_changes":[{"character":"","from":"","to":"","cause":""}],"transition":""}],
+"product_placements":[{"time_range":"","product":"","method":"","plot_function":""}],
+"appeal_logic":{"first_3_seconds":"","conflict":"","payoffs":[],"pace":"","why_it_works":""},
+"review_required":["需要人工确认的说话人或事实"]}。
+字幕数据：""" + json.dumps(compact, ensure_ascii=False)[:48000]
+    return _creative_asset_prompt(prompt, [item.get("image", "") for item in shots[::3]][:12], cfg)
+
+
+def _merge_speaker_calibration(segments: list[dict], understanding: dict) -> list[dict]:
+    calibrated = understanding.get("speaker_calibration") if isinstance(understanding, dict) else []
+    if not isinstance(calibrated, list):
+        return segments
+    result = []
+    for segment in segments:
+        best = None
+        for item in calibrated:
+            if not isinstance(item, dict):
+                continue
+            overlap = min(segment["end_ms"], int(item.get("end_ms") or 0)) - max(segment["start_ms"], int(item.get("start_ms") or 0))
+            if overlap > 0 and (best is None or overlap > best[0]):
+                best = (overlap, item)
+        merged = dict(segment)
+        if best:
+            item = best[1]
+            confidence = max(0.0, min(1.0, float(item.get("confidence") or 0)))
+            speaker = str(item.get("speaker") or "待确认")
+            merged.update({"speaker": speaker if confidence >= 0.6 else "待确认",
+                           "speaker_candidate": speaker, "speaker_confidence": confidence,
+                           "speaker_evidence": str(item.get("evidence") or "")[:160]})
+        result.append(merged)
+    return result
+
+
+def _validate_creative_phase(phase: str, result: dict) -> dict:
+    """拒绝把空壳模型输出当成成功。"""
+    if not isinstance(result, dict):
+        raise HTTPException(502, "AI 没有返回结构化结果")
+    if phase == "script":
+        script = result.get("script") or {}
+        if not result.get("role_profiles") or not script.get("story_units") or not script.get("shots"):
+            raise HTTPException(502, "新脚本缺少人物、剧情单元或镜头，已阻止残缺结果进入下一步")
+    elif phase == "storyboard":
+        rows = result.get("storyboard") or []
+        if not rows or any(not row.get("panels") or not row.get("time") for row in rows if isinstance(row, dict)):
+            raise HTTPException(502, "分镜组缺少时间或画面规划，已阻止残缺结果进入下一步")
+    elif phase == "prompts" and not result.get("video_prompts"):
+        raise HTTPException(502, "视频提示词为空，已阻止残缺结果进入下一步")
+    return result
 
 
 def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> list[dict]:
@@ -905,6 +992,7 @@ def asr_media(token: str):
 async def creative_deconstruct(
     request: Request,
     file: UploadFile = File(...),
+    subtitle: UploadFile | None = File(None),
     _code: None = Depends(require_code),
 ):
     """电商二创第一步：FFmpeg 临时拆镜头，百炼返回带时间轴台词。"""
@@ -942,8 +1030,9 @@ async def creative_deconstruct(
             capture_output=True, timeout=240,
         )
         transcript = {"text": "", "segments": []}
+        srt_segments = _parse_srt(await subtitle.read()) if subtitle and subtitle.filename else []
         asr_warning = ""
-        if audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
+        if not srt_segments and audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
             with _asr_media_lock:
                 _asr_media[token] = (audio_path, time.time() + 600)
             media_url = str(request.url_for("asr_media", token=token))
@@ -958,18 +1047,28 @@ async def creative_deconstruct(
         else:
             asr_warning = "视频没有可识别音轨，已完成镜头拆解。"
 
-        segments = transcript.get("segments") or []
+        segments = srt_segments or transcript.get("segments") or []
         for scene in scenes:
             scene["dialogue"] = " ".join(
                 seg["text"] for seg in segments
                 if seg.get("end_ms", 0) / 1000 > scene["start"] and
                 seg.get("start_ms", 0) / 1000 < scene["end"]
             ).strip()
+        understanding = {}
+        understanding_warning = ""
+        try:
+            understanding = await asyncio.to_thread(_creative_understanding, scenes, segments, cfg)
+            segments = _merge_speaker_calibration(segments, understanding)
+        except Exception as exc:
+            logger.warning("creative_understanding_fallback reason=%s", exc)
+            understanding_warning = "深层剧情理解暂未完成，镜头和台词仍已保留。"
         return {
             "duration": round(duration, 2), "shots": scenes,
-            "transcript": segments, "transcript_text": transcript.get("text", ""),
-            "warning": asr_warning,
-            "processing": "FFmpeg 临时拆解镜头与音轨；音轨由百炼识别；临时文件完成后删除。",
+            "transcript": segments, "transcript_text": " ".join(x.get("text", "") for x in segments),
+            "transcript_source": "srt" if srt_segments else "asr",
+            "understanding": understanding,
+            "warning": " ".join(x for x in (asr_warning if not srt_segments else "", understanding_warning) if x),
+            "processing": "优先使用 SRT；否则由语音模型转写。FFmpeg 提取镜头，AI 校准说话人与剧情结构；临时文件完成后删除。",
         }
     finally:
         with _asr_media_lock:
@@ -1003,6 +1102,10 @@ async def creative_workbench(
         "script": payload.get("script") or {},
         "storyboard": payload.get("storyboard") or [],
         "target_duration": int(payload.get("target_duration") or 15),
+        "target_total_seconds": max(60, min(420, int(payload.get("target_total_seconds") or 120))),
+        "variation": payload.get("variation") or {},
+        "reference_script": str(payload.get("reference_script") or "")[:12000],
+        "understanding": (payload.get("deconstruction") or {}).get("understanding") or {},
     }
     images = [item.get("image", "") for item in (payload.get("assets") or [])
               if isinstance(item, dict) and not item.get("hidden")]
@@ -1012,14 +1115,14 @@ async def creative_workbench(
                        if isinstance(item, dict)]
     images = (original_images[:8] + images)[:12]
     if phase == "script":
-        instruction = """你是电商短剧编导。识别参考图里人物的可见外形、发型、服装和产品特征；不要猜测身份、种族、健康等敏感属性。参考原片拆解，保留原片时间结构、镜头功能和节奏，但必须生成新的台词与合法原创表达，不得照抄。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"appearance\":\"\",\"wardrobe\":\"\"}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"shots\":[{\"shot\":1,\"start\":0,\"end\":2.5,\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]}}。"""
+        instruction = """你是短剧情裂变编剧。以目标总时长重新规划剧情，不照抄原片；根据用户选择决定是否换产品、场景、人物或冲突模式，并可参考成熟脚本的结构但不得复制原文。说话人必须继承已校准人物；待确认台词不得擅自归属。完整脚本要写清剧情单元承接、出场人物、人物关系、服装、道具、情绪动作、产品植入方式。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"identity\":\"\",\"personality\":\"\",\"appearance\":\"\",\"wardrobe_by_unit\":[{\"unit\":\"\",\"wardrobe\":\"\"}]}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\",\"placement_strategy\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"target_seconds\":120,\"story_units\":[{\"unit\":1,\"purpose\":\"\",\"transition\":\"\",\"characters\":[],\"wardrobe\":\"\",\"props\":[],\"product_placement\":\"\"}],\"shots\":[{\"shot\":1,\"unit\":1,\"start\":0,\"end\":10,\"speaker\":\"\",\"emotion\":\"\",\"action\":\"\",\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]}}。"""
     elif phase == "storyboard":
-        instruction = """你是分镜改造导演。基于已确认的新脚本，为每个镜头输出具体、可执行的改图方案和生图提示词，明确引用哪些人物/产品素材；隐藏素材不得引用。不要声称已经生成图片。输出 JSON：{\"storyboard\":[{\"shot\":1,\"time\":\"0-2.5s\",\"asset_ids\":[\"\"],\"edit_plan\":\"\",\"image_prompt\":\"\",\"negative_prompt\":\"\"}]}。"""
+        instruction = """你是连续分镜导演。按目标模型单段时长把完整脚本拆成连续分镜组，不按固定帧数；每组对应一段完整剧情，提供九宫格画面规划（1到9格，按实际镜头需要），包含全景/中景/近景/特写变化、前后连续动作、实际出场人物、人物服装、场景和产品素材引用。不要声称已经生成图片。输出 JSON：{\"storyboard\":[{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}],\"grid_prompt\":\"九宫格生图提示词\",\"negative_prompt\":\"\"}]}。"""
     else:
-        instruction = """你是视频生成提示词编排器。按目标时长把连续分镜组成若干段，每段总时长不得明显超过目标时长，并保留镜头顺序。输出 JSON：{\"video_prompts\":[{\"group\":1,\"start_shot\":1,\"end_shot\":3,\"duration\":15,\"prompt\":\"包含主体、动作、运镜、场景、节奏、转场、声音的可执行提示词\"}]}。"""
+        instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
     result = await asyncio.to_thread(_creative_asset_prompt, prompt, images, cfg)
-    return result
+    return _validate_creative_phase(phase, result)
 
 
 def _validated_export_report(payload: dict) -> dict:
