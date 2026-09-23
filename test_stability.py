@@ -22,6 +22,17 @@ class StabilityTests(unittest.TestCase):
         with self.assertRaises(app.HTTPException):
             app._validate_creative_phase("storyboard", {"storyboard": []})
 
+    def test_creative_understanding_reuses_existing_analysis(self):
+        result = app._understanding_from_analysis(
+            {"chapters": [{"time": "00:00", "label": "开场钩子", "summary": "提出问题"}],
+             "overall_summary": "先提痛点，再给方案"},
+            [{"start_ms": 0, "end_ms": 1000, "speaker": "小知", "text": "开始吧"},
+             {"start_ms": 1000, "end_ms": 2000, "speaker": "待校准", "text": "好的"}],
+        )
+        self.assertEqual(result["characters"][0]["name"], "小知")
+        self.assertEqual(result["story_units"][0]["summary"], "提出问题")
+        self.assertEqual(result["speaker_calibration"][1]["speaker"], "待确认")
+
     def test_creative_json_mode_retries_malformed_output(self):
         malformed = mock.Mock(status_code=200)
         malformed.json.return_value = {
@@ -39,6 +50,13 @@ class StabilityTests(unittest.TestCase):
         sent = post.call_args_list[0].kwargs["json"]
         self.assertEqual(sent["response_format"], {"type": "json_object"})
         self.assertFalse(sent["enable_thinking"])
+
+    def test_script_without_people_is_valid_for_product_only_video(self):
+        result = app._validate_creative_phase("script", {
+            "script": {"story_units": [{"unit": 1}], "shots": [{"shot": 1}]}
+        })
+        self.assertEqual(result["role_profiles"], [])
+        self.assertEqual(result["product_profiles"], [])
 
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
@@ -100,6 +118,9 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(result["title"], "恢复成功")
         self.assertEqual(post.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
+        sent = post.call_args_list[0].kwargs["json"]
+        self.assertEqual(sent["response_format"], {"type": "json_object"})
+        self.assertFalse(sent["enable_thinking"])
 
     def test_model_does_not_retry_permanent_client_error(self):
         rejected = mock.Mock(status_code=400, headers={})

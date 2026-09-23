@@ -88,6 +88,8 @@ ENABLE_DEBUG_ENDPOINTS = _env_flag("VI_ENABLE_DEBUG", not DEPLOY_MODE)
 SERVICE_VERSION = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("VI_VERSION", "dev"))[:12]
 
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+IMAGE_API_URL = os.environ.get("VI_IMAGE_API_URL", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation").strip()
+IMAGE_MODEL = os.environ.get("VI_IMAGE_MODEL", "qwen-image-3.0").strip()
 ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
 ASR_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
 ASR_MODEL = os.environ.get(
@@ -566,6 +568,56 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
     return _creative_asset_prompt(prompt, [item.get("image", "") for item in shots[::3]][:12], cfg)
 
 
+def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict:
+    """复用首轮解析结果，避免二创入口再次完整调用视觉模型。"""
+    chapters = analysis.get("chapters") if isinstance(analysis, dict) else []
+    chapters = chapters if isinstance(chapters, list) else []
+    calibration = []
+    names: list[str] = []
+    for item in transcript[:1200]:
+        if not isinstance(item, dict):
+            continue
+        speaker = str(item.get("speaker") or "待确认")
+        explicit = speaker not in {"", "待确认", "待校准", "unknown"}
+        if explicit and speaker not in names:
+            names.append(speaker)
+        calibration.append({
+            "start_ms": int(item.get("start_ms") or 0),
+            "end_ms": int(item.get("end_ms") or 0),
+            "speaker": speaker if explicit else "待确认",
+            "text": str(item.get("text") or ""),
+            "confidence": 0.9 if explicit else 0.0,
+            "evidence": "字幕人物标注" if explicit else "需要人工确认",
+        })
+    units = []
+    scenes = []
+    for index, chapter in enumerate(chapters[:40]):
+        if not isinstance(chapter, dict):
+            continue
+        title = str(chapter.get("label") or chapter.get("title") or f"内容段落 {index + 1}")
+        time_range = str(chapter.get("time") or "")
+        summary = str(chapter.get("summary") or chapter.get("content") or title)
+        units.append({"unit": index + 1, "time_range": time_range, "summary": summary,
+                      "characters": [], "emotion_changes": [], "transition": ""})
+        scenes.append({"name": title, "time_range": time_range, "props": []})
+    remix = analysis.get("remix") if isinstance(analysis, dict) else {}
+    cards = remix.get("cards") if isinstance(remix, dict) else []
+    cards = cards if isinstance(cards, list) else []
+    appeal_text = "；".join(str(x.get("content") or x.get("text") or x.get("title") or "")
+                            for x in cards[:6] if isinstance(x, dict)).strip("；")
+    return {
+        "speaker_calibration": calibration,
+        "characters": [{"id": f"char-{i + 1}", "name": name, "identity": "",
+                        "personality": "", "appearance": "", "wardrobe_by_unit": []}
+                       for i, name in enumerate(names)],
+        "relationships": [], "scenes": scenes, "story_units": units,
+        "product_placements": [],
+        "appeal_logic": {"first_3_seconds": "", "conflict": "", "payoffs": [], "pace": "",
+                         "why_it_works": appeal_text or str(analysis.get("overall_summary") or "")[:500]},
+        "review_required": [] if names else ["说话人需要人工确认"],
+    }
+
+
 def _merge_speaker_calibration(segments: list[dict], understanding: dict) -> list[dict]:
     calibrated = understanding.get("speaker_calibration") if isinstance(understanding, dict) else []
     if not isinstance(calibrated, list):
@@ -597,8 +649,10 @@ def _validate_creative_phase(phase: str, result: dict) -> dict:
         raise HTTPException(502, "AI 没有返回结构化结果")
     if phase == "script":
         script = result.get("script") or {}
-        if not result.get("role_profiles") or not script.get("story_units") or not script.get("shots"):
-            raise HTTPException(502, "新脚本缺少人物、剧情单元或镜头，已阻止残缺结果进入下一步")
+        if not script.get("story_units") or not script.get("shots"):
+            raise HTTPException(502, "新脚本缺少剧情单元或镜头，已阻止残缺结果进入下一步")
+        result.setdefault("role_profiles", [])
+        result.setdefault("product_profiles", [])
     elif phase == "storyboard":
         rows = result.get("storyboard") or []
         if not rows or any(not row.get("panels") or not row.get("time") for row in rows if isinstance(row, dict)):
@@ -651,22 +705,26 @@ def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> li
     return deduped
 
 
-def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict) -> dict:
+def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
+                           max_tokens: int = 6144) -> dict:
     """让视觉模型理解人物/产品参考图，并输出受约束 JSON。"""
-    content = [{"type": "text", "text": prompt}]
-    for image in images[:12]:
-        if isinstance(image, str) and image.startswith("data:image/") and len(image) <= 1_500_000:
-            content.append({"type": "image_url", "image_url": {"url": image}})
+    valid_images = [image for image in images[:12]
+                    if isinstance(image, str) and image.startswith("data:image/")
+                    and len(image) <= 1_500_000]
     last_error: Exception | None = None
     for attempt in range(3):
         try:
+            image_limit = len(valid_images) if attempt == 0 else (4 if attempt == 1 else 2)
+            content = [{"type": "text", "text": prompt}]
+            content.extend({"type": "image_url", "image_url": {"url": image}}
+                           for image in valid_images[:image_limit])
             response = requests.post(
                 API_URL,
                 headers={"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json"},
                 json={"model": cfg.get("model") or DEFAULT_MODEL,
                       "messages": [{"role": "user", "content": content}],
                       "temperature": 0.2,
-                      "max_tokens": 8192,
+                      "max_tokens": max(1024, min(8192, int(max_tokens))),
                       "enable_thinking": False,
                       "response_format": {"type": "json_object"}},
                 timeout=240,
@@ -685,6 +743,50 @@ def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict) -> dict:
     if isinstance(last_error, HTTPException):
         raise last_error
     raise HTTPException(502, "内容整理暂未完成")
+
+
+def _generate_storyboard_grid(board: dict, assets: list[dict], cfg: dict) -> dict:
+    """根据新分镜和新资产生成一张无时间标记的二创九宫格。"""
+    panels = (board.get("panels") or [])[:9]
+    if not panels:
+        raise HTTPException(400, "当前分镜组没有可生成的画面")
+    wanted = {str(x) for x in (board.get("asset_ids") or [])}
+    active = [x for x in assets if isinstance(x, dict) and not x.get("hidden")]
+    matched = [x for x in active if str(x.get("id")) in wanted] or active
+    refs = [x.get("image") for x in matched if isinstance(x.get("image"), str)
+            and x.get("image", "").startswith("data:image/")][:3]
+    panel_text = "\n".join(
+        f"第{i + 1}格：{p.get('shot_size') or '镜头'}，{p.get('visual') or ''}，"
+        f"人物情绪动作：{p.get('emotion_action') or ''}"
+        for i, p in enumerate(panels)
+    )
+    prompt = (
+        "生成一张真实影视质感的3×3二创分镜九宫格。严格使用参考图中的人物、产品和场景身份，"
+        "保持人物长相、服装、产品外观和场景连续一致；九格按从左到右、从上到下表达连续剧情。"
+        "画面内不要出现时间、进度条、序号、字幕、文字、水印或界面控件。"
+        f"\n整体分镜要求：{str(board.get('grid_prompt') or '')[:2500]}\n{panel_text[:4500]}"
+    )
+    response = requests.post(
+        IMAGE_API_URL,
+        headers={"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json"},
+        json={"model": IMAGE_MODEL,
+              "input": {"messages": [{"role": "user", "content":
+                         [{"image": image} for image in refs] + [{"text": prompt}]}]},
+              "parameters": {"size": "1024*1024", "n": 1, "prompt_extend": True,
+                             "enable_thinking": False, "watermark": False,
+                             "negative_prompt": str(board.get("negative_prompt") or "")[:1000]}},
+        timeout=600,
+    )
+    data = response.json() if response.content else {}
+    if response.status_code != 200:
+        raise HTTPException(response.status_code, data.get("message") or "二创九宫格生成失败")
+    choices = ((data.get("output") or {}).get("choices") or [])
+    items = (((choices[0].get("message") or {}).get("content") or []) if choices else [])
+    image_url = next((x.get("image") for x in items if isinstance(x, dict) and x.get("image")), "")
+    if not image_url:
+        raise HTTPException(502, "图片模型没有返回九宫格图片，分镜规划已保留")
+    return {"image_url": image_url, "model": IMAGE_MODEL, "reference_count": len(refs),
+            "estimated_cost_cny": round(0.18 + 0.02 * len(refs), 2)}
 
 
 ANALYSIS_MODES = {
@@ -744,6 +846,9 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
         "model": cfg.get("model") or DEFAULT_MODEL,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.3,
+        "max_tokens": 4096,
+        "enable_thinking": False,
+        "response_format": {"type": "json_object"},
     }
     last_err: HTTPException | None = None
     for attempt in range(3):  # 模型偶发返回非 JSON，自动重试
@@ -1005,6 +1110,7 @@ async def creative_deconstruct(
     request: Request,
     file: UploadFile = File(...),
     subtitle: UploadFile | None = File(None),
+    analysis: str = Form(""),
     _code: None = Depends(require_code),
 ):
     """电商二创第一步：FFmpeg 临时拆镜头，百炼返回带时间轴台词。"""
@@ -1034,17 +1140,22 @@ async def creative_deconstruct(
             raise HTTPException(400, "无法读取视频，请转换为 MP4（H.264/AAC）后重试")
         if duration > 30 * 60:
             raise HTTPException(400, "电商二创深度拆解暂支持 30 分钟以内视频")
-        scenes = await asyncio.to_thread(_creative_scene_frames, video_path, tmpdir, duration)
-        audio_run = await asyncio.to_thread(
-            subprocess.run,
-            [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video_path,
-             "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", "-y", audio_path],
-            capture_output=True, timeout=240,
-        )
-        transcript = {"text": "", "segments": []}
         srt_segments = _parse_srt(await subtitle.read()) if subtitle and subtitle.filename else []
+        scenes_task = asyncio.to_thread(_creative_scene_frames, video_path, tmpdir, duration)
+        if srt_segments:
+            scenes = await scenes_task
+            audio_run = None
+        else:
+            audio_task = asyncio.to_thread(
+                subprocess.run,
+                [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video_path,
+                 "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", "-y", audio_path],
+                capture_output=True, timeout=240,
+            )
+            scenes, audio_run = await asyncio.gather(scenes_task, audio_task)
+        transcript = {"text": "", "segments": []}
         asr_warning = ""
-        if not srt_segments and audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
+        if not srt_segments and audio_run and audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
             with _asr_media_lock:
                 _asr_media[token] = (audio_path, time.time() + 600)
             media_url = str(request.url_for("asr_media", token=token))
@@ -1069,7 +1180,11 @@ async def creative_deconstruct(
         understanding = {}
         understanding_warning = ""
         try:
-            understanding = await asyncio.to_thread(_creative_understanding, scenes, segments, cfg)
+            base_analysis = json.loads(analysis) if analysis and len(analysis) <= 500_000 else {}
+            if isinstance(base_analysis, dict) and base_analysis:
+                understanding = _understanding_from_analysis(base_analysis, segments)
+            else:
+                understanding = await asyncio.to_thread(_creative_understanding, scenes, segments, cfg)
             segments = _merge_speaker_calibration(segments, understanding)
         except Exception as exc:
             logger.warning("creative_understanding_fallback reason=%s", exc)
@@ -1107,7 +1222,7 @@ async def creative_workbench(
         "shots": [{k: item.get(k) for k in ("shot", "start", "end", "dialogue")}
                   for item in ((payload.get("deconstruction") or {}).get("shots") or [])[:40]
                   if isinstance(item, dict)],
-        "transcript": (payload.get("deconstruction") or {}).get("transcript", [])[:120],
+        "transcript": (payload.get("deconstruction") or {}).get("transcript", [])[:80],
         "assets": [{k: item.get(k) for k in ("id", "name", "type", "hidden")}
                    for item in (payload.get("assets") or [])[:12] if isinstance(item, dict)],
         "requirements": str(payload.get("requirements") or "")[:4000],
@@ -1116,7 +1231,7 @@ async def creative_workbench(
         "target_duration": int(payload.get("target_duration") or 15),
         "target_total_seconds": max(60, min(420, int(payload.get("target_total_seconds") or 120))),
         "variation": payload.get("variation") or {},
-        "reference_script": str(payload.get("reference_script") or "")[:12000],
+        "reference_script": str(payload.get("reference_script") or "")[:6000],
         "understanding": (payload.get("deconstruction") or {}).get("understanding") or {},
     }
     asset_images = [item.get("image", "") for item in (payload.get("assets") or [])
@@ -1126,7 +1241,7 @@ async def creative_workbench(
                        ((payload.get("deconstruction") or {}).get("shots") or [])[::4]
                        if isinstance(item, dict)]
     if phase == "script":
-        images = (original_images[:4] + asset_images[:6])[:8]
+        images = (original_images[:2] + asset_images[:4])[:6]
         context.pop("storyboard", None)
     elif phase == "storyboard":
         images = asset_images[:6]
@@ -1143,8 +1258,33 @@ async def creative_workbench(
     else:
         instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
-    result = await asyncio.to_thread(_creative_asset_prompt, prompt, images, cfg)
-    return _validate_creative_phase(phase, result)
+    token_limit = 4096 if phase in {"script", "storyboard"} else 3072
+    result = await asyncio.to_thread(_creative_asset_prompt, prompt, images, cfg, token_limit)
+    try:
+        return _validate_creative_phase(phase, result)
+    except HTTPException:
+        repair_prompt = prompt + "\n上一次结果字段不完整。请严格按指定 JSON 结构补全必填字段，只返回 JSON。"
+        repaired = await asyncio.to_thread(
+            _creative_asset_prompt, repair_prompt, images[:4], cfg, token_limit)
+        return _validate_creative_phase(phase, repaired)
+
+
+@app.post("/api/creative/storyboard-grid")
+async def creative_storyboard_grid(
+    payload: dict = Body(...),
+    _code: None = Depends(require_code),
+):
+    """用户确认费用后，为一个新分镜组生成真正的二创九宫格。"""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置 API Key")
+    if len(json.dumps(payload, ensure_ascii=False)) > 6_000_000:
+        raise HTTPException(413, "参考图片过大，请减少素材或压缩后重试")
+    board = payload.get("storyboard") or {}
+    if not isinstance(board, dict):
+        raise HTTPException(400, "缺少分镜组")
+    return await asyncio.to_thread(
+        _generate_storyboard_grid, board, payload.get("assets") or [], cfg)
 
 
 def _validated_export_report(payload: dict) -> dict:

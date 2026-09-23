@@ -157,6 +157,7 @@
   .asset-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.asset-toolbar label{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;background:#fff}.asset-toolbar input{display:none}
   .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:10px 0}.asset-card{border:1px solid var(--line);border-radius:9px;padding:8px;background:#fff}.asset-card.hidden{opacity:.45}.asset-card img{width:100%;height:105px;object-fit:cover;border-radius:6px;background:#edf1f5}.asset-card input{width:100%;border:0;border-bottom:1px solid var(--line);padding:5px 2px;font:inherit;font-size:12px}.asset-actions{display:flex;gap:5px;margin-top:6px}.asset-actions button{padding:4px 7px;font-size:11px;flex:1}
   .work-textarea{width:100%;min-height:88px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;resize:vertical}.work-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .generated-grid{margin-top:12px}.generated-grid img{display:block;width:min(100%,720px);aspect-ratio:1/1;object-fit:contain;border:1px solid var(--line);border-radius:9px;background:#111}.generated-grid a{display:inline-block;margin-top:6px;color:var(--blue-d)}
   .work-output{margin-top:12px}.work-output table{width:100%;border-collapse:collapse;font-size:12px}.work-output th,.work-output td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}.work-output th{background:#f4f7fa}.work-output td[contenteditable="true"]{background:#fffdf1}
   .privacy-line{font-size:12px;color:#6b5320;background:#fff8e8;border:1px solid #efddb1;border-radius:8px;padding:9px 11px}
   .creative-failure{display:none;margin:12px 0;padding:12px 14px;border:1px solid #e6b2ae;border-radius:9px;background:#fff4f3;color:#812b25;font-size:13px}
@@ -1046,6 +1047,7 @@ $("btnDeconstruct").onclick = function(){
   if(selectedScenario() !== "creative"){ toast("请先选择“内容整理与二次创作”场景"); return; }
   if(Number(lastResult&&lastResult._meta&&lastResult._meta.duration)>1800){fallbackDeconstruction();return;}
   var btn = this, fd = new FormData(); fd.append("file", currentFile, currentFile.name);var sub=$("subtitleFile").files[0];if(sub)fd.append("subtitle",sub,sub.name);
+  if(lastResult)fd.append("analysis",JSON.stringify(lastResult));
   btn.disabled = true; btn.textContent = "正在理解…"; $("deconstructStatus").textContent = "正在识别镜头、校准多人对白并分析剧情结构，请勿刷新…";
   api("/api/creative/deconstruct", {method:"POST", body:fd})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
@@ -1164,9 +1166,20 @@ function renderStoryboard(rows){
     if(!panels.length)panels=[{panel:1,shot_size:"规划",visual:x.image_prompt||x.edit_plan||x.grid_prompt||"待补充分镜画面",dialogue:""}];
     panels.forEach(function(p,i){cells.push('<div class="plan-cell"><b>'+(p.panel||i+1)+' · '+esc(p.shot_size||"镜头")+'</b>'+esc(p.visual||"")+(p.emotion_action?'<br>'+esc(p.emotion_action):'')+(p.dialogue?'<br>台词：'+esc(p.dialogue):'')+'</div>');});
     while(cells.length<9)cells.push('<div class="plan-cell empty">待生成画面</div>');
-    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 九宫格分镜规划（文字预演）</div><div class="plan-grid">'+cells.join("")+'</div></div>';
+    var generated=x.generated_grid_url?'<div class="generated-grid"><img src="'+esc(x.generated_grid_url)+'" alt="第 '+esc(x.group||index+1)+' 组二创九宫格"><br><a href="'+esc(x.generated_grid_url)+'" target="_blank" rel="noopener">查看/保存原图</a></div>':'';
+    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'">生成本组二创九宫格</button><span class="tip">预计 ¥0.18～0.24，确认后调用百炼</span></div>'+generated+'</div>';
   }).join("")+'</div>';
   $("storyboardOutput").innerHTML=table+grids;
+  document.querySelectorAll("[data-generate-grid]").forEach(function(button){button.onclick=function(){
+    var index=Number(button.dataset.generateGrid),board=creativeWorkspace.storyboard[index];if(!board)return;
+    var refs=creativeWorkspace.assets.filter(function(x){return !x.hidden;}).length,estimate=(.18+.02*Math.min(3,refs)).toFixed(2);
+    if(!confirm("将调用百炼生成 1 张二创九宫格。预估费用约 ¥"+estimate+"（有免费额度时可能不扣费），是否继续？"))return;
+    button.disabled=true;button.textContent="九宫格生成中…";
+    api("/api/creative/storyboard-grid",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({storyboard:board,assets:creativeWorkspace.assets})})
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"九宫格生成失败");return j;});})
+      .then(function(j){board.generated_grid_url=j.image_url;renderStoryboard(creativeWorkspace.storyboard);toast("二创九宫格已生成");})
+      .catch(function(e){button.disabled=false;button.textContent="重新生成本组九宫格";toast(e.message||"九宫格生成失败，分镜规划已保留");});
+  };});
   $("storyboardPanel").style.display="block";setWorkbenchStep(4);$("storyboardPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("btnStoryboard").onclick=function(){syncWorkbenchScript();var btn=this;callWorkbench("storyboard",btn).then(function(j){creativeWorkspace.storyboard=j.storyboard||[];renderStoryboard(creativeWorkspace.storyboard);toast("分镜改造方案已生成");}).catch(function(){fallbackStoryboard();});};

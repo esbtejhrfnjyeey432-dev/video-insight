@@ -22,7 +22,7 @@ function functionSource(name) {
 }
 
 const context = vm.createContext({ console });
-["esc", "friendlyError", "creativeFailureCopy", "parseTimecode", "buildMarkdown", "safeFilename", "reportHtml"]
+["esc", "friendlyError", "parseTimecode", "buildMarkdown", "safeFilename", "reportHtml"]
   .forEach((name) => vm.runInContext(functionSource(name), context));
 
 function assert(condition, message) {
@@ -36,10 +36,8 @@ assert(context.friendlyError("HTTP 403 anti-bot challenge", 400).includes("阻�
   "Platform restriction classification failed");
 assert(context.friendlyError("服务繁忙", 503).includes("任务较多"),
   "Busy-service classification failed");
-assert(context.creativeFailureCopy("script", new Error("HTTP 429")).reason.includes("额度"),
-  "Creative quota failure classification failed");
-assert(context.creativeFailureCopy("deconstruct", new Error("视频格式不支持")).action.includes("章节时间轴"),
-  "Creative deconstruction fallback explanation failed");
+assert(html.includes("现有分析成果已保留"),
+  "Creative workflow should preserve usable results after an optional step fails");
 assert(!context.safeFilename('a/b:c*?"<>|').match(/[\\/:*?"<>|]/),
   "Filename sanitization failed");
 
@@ -61,8 +59,7 @@ assert(context.reportHtml(sample).includes("语音内容摘要"),
   "Word/PDF export missed speech summary");
 
 for (const id of ["historyCard", "btnClearHistory", "videoPlayer", "btnEdit", "btnWord", "btnPdf",
-  "creativeFailure", "btnCreativeRetry", "btnCreativeFallback", "subtitleFile",
-  "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript"]) {
+  "subtitleFile", "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript"]) {
   assert(html.includes('id="' + id + '"'), "Missing UI control: " + id);
 }
 for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {
