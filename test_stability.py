@@ -92,6 +92,17 @@ class StabilityTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_agent_jobs_use_a_separate_pool(self):
+        async def scenario():
+            link_slot = await app.acquire_analysis_slot("link")
+            try:
+                agent_slot = await app.acquire_analysis_slot("agent")
+                agent_slot.release()
+            finally:
+                link_slot.release()
+
+        asyncio.run(scenario())
+
     def test_transcript_text_supports_whole_text_and_sentences(self):
         payload = {
             "transcripts": [
@@ -127,6 +138,39 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(post.call_args.kwargs["json"]["input"]["file_urls"],
                          ["https://example.com/video.mp4"])
         self.assertEqual(get.call_count, 2)
+
+    def test_agent_plan_rejects_unknown_and_duplicate_tools(self):
+        analysis = {"teaching": {"is_teaching": True}}
+        plan = app._normalize_agent_plan({
+            "intent": "整理课程",
+            "route": "课程",
+            "steps": [
+                {"tool": "delete_everything", "reason": "越权工具"},
+                {"tool": "course_pack", "reason": "生成课件"},
+                {"tool": "course_pack", "reason": "重复调用"},
+                {"tool": "creative_pack", "reason": "生成二创"},
+            ],
+        }, analysis, ["auto"])
+        self.assertEqual([x["tool"] for x in plan["steps"]],
+                         ["course_pack", "creative_pack"])
+
+    def test_agent_plan_has_safe_fallback(self):
+        analysis = {"teaching": {"is_teaching": False}}
+        plan = app._normalize_agent_plan({}, analysis, ["auto"])
+        self.assertEqual(plan["steps"], [{
+            "tool": "creative_pack", "reason": "生成多平台二创素材",
+        }])
+
+    def test_agent_quality_requires_complete_outputs(self):
+        plan = {"steps": [{"tool": "creative_pack"}, {"tool": "course_pack"}]}
+        incomplete = app._agent_quality({"creative": {"scripts": {"60s": "x"}}}, plan)
+        self.assertFalse(incomplete["passed"])
+        complete = app._agent_quality({
+            "creative": {"scripts": {"60s": "x"}, "storyboard": [{}],
+                         "xiaohongshu": {"body": "x"}},
+            "course": {"outline": [{}], "slides": [{}]},
+        }, plan)
+        self.assertTrue(complete["passed"])
 
 
 if __name__ == "__main__":

@@ -16,15 +16,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
 
 import requests
 import imageio_ffmpeg
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import resolver
@@ -63,9 +64,13 @@ DAILY_LIMIT = int(os.environ.get("VI_DAILY_LIMIT", "20"))  # 部署模式：每�
 _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外泄后被刷爆额度
 MAX_LINK_CONCURRENT = max(1, int(os.environ.get("VI_MAX_LINK_CONCURRENT", "1")))
 MAX_FRAME_CONCURRENT = max(1, int(os.environ.get("VI_MAX_FRAME_CONCURRENT", "4")))
+MAX_AGENT_CONCURRENT = max(1, int(os.environ.get("VI_MAX_AGENT_CONCURRENT", "2")))
 ANALYSIS_QUEUE_TIMEOUT = max(1, int(os.environ.get("VI_QUEUE_TIMEOUT", "20")))
 _link_slots = asyncio.Semaphore(MAX_LINK_CONCURRENT)
 _frame_slots = asyncio.Semaphore(MAX_FRAME_CONCURRENT)
+_agent_slots = asyncio.Semaphore(MAX_AGENT_CONCURRENT)
+_asr_media: dict[str, tuple[str, float]] = {}
+_asr_media_lock = threading.Lock()
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name, "").strip().lower()
@@ -86,6 +91,7 @@ ASR_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
 ASR_MODEL = os.environ.get(
     "VI_ASR_MODEL", "qwen-audio-3.0-asr-flash-filetrans").strip()
 DEFAULT_MODEL = "qwen3-vl-plus"
+AGENT_MODEL = os.environ.get("VI_AGENT_MODEL", "qwen-plus").strip()
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
 # 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 6 帧 / 640px）
 MAX_FRAMES = int(os.environ.get("VI_MAX_FRAMES", "12"))
@@ -150,8 +156,11 @@ async def request_observability(request: Request, call_next):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    log_path = ("/api/asr-media/<redacted>"
+                if request.url.path.startswith("/api/asr-media/")
+                else request.url.path)
     logger.info("request id=%s method=%s path=%s status=%s ms=%s",
-                request_id, request.method, request.url.path,
+                request_id, request.method, log_path,
                 response.status_code, elapsed_ms)
     return response
 
@@ -210,7 +219,8 @@ async def optional_code(x_access_code: str = Header(default="")):
 
 async def acquire_analysis_slot(kind: str):
     """本地抽帧与链接解析分池，轻任务多人并行，重任务限制并发防止 OOM。"""
-    slots = _frame_slots if kind == "frames" else _link_slots
+    slots = (_frame_slots if kind == "frames" else
+             _agent_slots if kind == "agent" else _link_slots)
     try:
         await asyncio.wait_for(slots.acquire(), timeout=ANALYSIS_QUEUE_TIMEOUT)
     except (asyncio.TimeoutError, TimeoutError):
@@ -566,6 +576,192 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
             if attempt < 2:
                 time.sleep(0.25 * (attempt + 1))
     raise last_err
+
+
+def call_qwen_text_json(prompt: str, cfg: dict, temperature: float = 0.2) -> dict:
+    """调用文本模型并要求返回 JSON，供受控 Agent 的规划与工具执行使用。"""
+    body = {
+        "model": AGENT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+    }
+    last_err: HTTPException | None = None
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                API_URL,
+                headers={
+                    "Authorization": "Bearer " + cfg["api_key"],
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=180,
+            )
+        except Exception:
+            logger.warning("agent_model_request_failed attempt=%s", attempt + 1)
+            if attempt < 2:
+                time.sleep(_model_retry_delay(None, attempt))
+                continue
+            raise HTTPException(502, "Agent 模型暂时不可用，请稍后重试")
+        if response.status_code != 200:
+            logger.warning("agent_model_response_failed attempt=%s status=%s",
+                           attempt + 1, response.status_code)
+            if response.status_code in RETRYABLE_MODEL_STATUS and attempt < 2:
+                time.sleep(_model_retry_delay(response, attempt))
+                continue
+            raise HTTPException(502, f"Agent 模型返回异常（HTTP {response.status_code}）")
+        message = response.json()["choices"][0]["message"]
+        text = (message.get("content") or message.get("reasoning_content") or "").strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        try:
+            return parse_model_json(text)
+        except HTTPException as exc:
+            last_err = exc
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
+    raise last_err
+
+
+AGENT_TOOLS = ("creative_pack", "course_pack")
+
+
+def _analysis_for_agent(analysis: dict) -> dict:
+    """只向 Agent 传递报告内容，不传密钥、原始帧或内部请求信息。"""
+    allowed = (
+        "title", "category", "tags", "key_info", "chapters", "teaching",
+        "speech_summary", "overall_summary", "remix",
+    )
+    return {key: analysis.get(key) for key in allowed if key in analysis}
+
+
+def _normalize_agent_plan(plan: dict, analysis: dict, requested: list[str]) -> dict:
+    """把模型计划限制在白名单和最多两步内，并为异常计划提供可靠降级。"""
+    raw_steps = plan.get("steps") if isinstance(plan, dict) else []
+    steps: list[dict] = []
+    for item in raw_steps or []:
+        if not isinstance(item, dict):
+            continue
+        tool = str(item.get("tool") or "")
+        if tool not in AGENT_TOOLS or any(step["tool"] == tool for step in steps):
+            continue
+        steps.append({"tool": tool, "reason": str(item.get("reason") or "")[:160]})
+        if len(steps) == 2:
+            break
+
+    requested_set = {str(x).lower() for x in requested}
+    teaching = bool((analysis.get("teaching") or {}).get("is_teaching"))
+    if not steps:
+        if "creative" in requested_set or "auto" in requested_set or not requested_set:
+            steps.append({"tool": "creative_pack", "reason": "生成多平台二创素材"})
+        if teaching and ("course" in requested_set or "auto" in requested_set or not requested_set):
+            steps.append({"tool": "course_pack", "reason": "教学内容适合整理为课程资料"})
+    return {
+        "intent": str(plan.get("intent") or "深化视频内容价值")[:120],
+        "route": str(plan.get("route") or ("课程整理" if teaching else "内容二创"))[:80],
+        "steps": steps,
+    }
+
+
+def _agent_plan(analysis: dict, requested: list[str], cfg: dict) -> dict:
+    snapshot = json.dumps(_analysis_for_agent(analysis), ensure_ascii=False)[:45000]
+    prompt = f"""你是 VideoInsight 的任务规划 Agent。根据已有视频分析和用户目标，选择最有价值的工具。
+只能选择以下工具，最多两步，不得发明工具：
+- creative_pack：生成多时长脚本、精彩片段建议、分镜、小红书文案和短视频口播稿。
+- course_pack：生成课程大纲、学习目标、课件页和逐页讲师备注；只适合课程、讲座、知识教学内容。
+用户目标：{json.dumps(requested or ['auto'], ensure_ascii=False)}
+已有分析：{snapshot}
+只输出 JSON：{{"intent":"用户意图","route":"选择的创作路线","steps":[{{"tool":"creative_pack","reason":"选择理由"}}]}}
+不要因为工具存在就全部选择；只选择与内容真正匹配的工具。"""
+    return _normalize_agent_plan(call_qwen_text_json(prompt, cfg), analysis, requested)
+
+
+def _run_agent_tool(tool: str, analysis: dict, cfg: dict) -> dict:
+    snapshot = json.dumps(_analysis_for_agent(analysis), ensure_ascii=False)[:45000]
+    grounding = "所有时间点、事实和金句必须能由已有分析支持；不能确认时明确标注建议复核原视频。"
+    if tool == "creative_pack":
+        prompt = f"""你是视频二次创作 Agent。基于下方已有分析生成可直接编辑使用的二创素材。{grounding}
+已有分析：{snapshot}
+只输出 JSON，结构必须为：
+{{"creative":{{
+"scripts":{{"15s":"15秒脚本","30s":"30秒脚本","60s":"60秒脚本","90s":"90秒脚本"}},
+"highlights":[{{"start":"MM:SS","end":"MM:SS","title":"片段标题","reason":"入选原因","hook":"开场钩子"}}],
+"storyboard":[{{"shot":1,"time":"时间范围","visual":"画面建议","narration":"旁白","caption":"屏幕字幕"}}],
+"xiaohongshu":{{"titles":["标题1","标题2","标题3"],"body":"可直接发布的正文","tags":["标签"]}},
+"voiceover":{{"title":"口播标题","script":"自然、可直接朗读的口播稿"}}
+}}}}
+精彩片段给 3-6 个，分镜给 5-10 个；禁止虚构原视频不存在的数据、原话或具体画面。"""
+        return call_qwen_text_json(prompt, cfg, 0.35)
+    if tool == "course_pack":
+        prompt = f"""你是课程内容整理 Agent。基于下方已有分析生成可直接编辑并导出课件的结构。{grounding}
+已有分析：{snapshot}
+只输出 JSON，结构必须为：
+{{"course":{{
+"learning_objectives":["学习目标"],
+"outline":[{{"title":"章节","points":["知识点"]}}],
+"slides":[{{"title":"PPT页标题","bullets":["页面要点"],"speaker_notes":"讲师备注与讲解建议"}}],
+"exercises":[{{"question":"复习题或练习","answer":"参考答案"}}]
+}}}}
+课件建议 6-12 页，每页信息简洁；如果证据不足，不得补造知识。"""
+        return call_qwen_text_json(prompt, cfg, 0.25)
+    raise HTTPException(400, "不支持的 Agent 工具")
+
+
+def _agent_quality(result: dict, plan: dict) -> dict:
+    """零额外模型费用的结构质检；阻止空壳结果被标记为成功。"""
+    checks: list[dict] = []
+    selected = [step["tool"] for step in plan.get("steps", [])]
+    if "creative_pack" in selected:
+        creative = result.get("creative") or {}
+        passed = bool(creative.get("scripts") and creative.get("storyboard") and
+                      creative.get("xiaohongshu"))
+        checks.append({"name": "二创素材完整性", "passed": passed})
+    if "course_pack" in selected:
+        course = result.get("course") or {}
+        passed = bool(course.get("outline") and course.get("slides"))
+        checks.append({"name": "课程资料完整性", "passed": passed})
+    ok = bool(checks) and all(item["passed"] for item in checks)
+    return {"passed": ok, "checks": checks}
+
+
+@app.post("/api/agent/enrich")
+async def agent_enrich(
+    payload: dict = Body(...),
+    _code: None = Depends(require_code),
+):
+    """受控 Agent：规划 -> 选择白名单工具 -> 执行 -> 结构质检。"""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置 API Key")
+    analysis = payload.get("analysis")
+    if not isinstance(analysis, dict) or not analysis.get("title"):
+        raise HTTPException(400, "请先完成视频分析")
+    if len(json.dumps(analysis, ensure_ascii=False)) > 200_000:
+        raise HTTPException(413, "分析报告数据过大")
+    requested = payload.get("goals") or ["auto"]
+    if not isinstance(requested, list) or len(requested) > 4:
+        raise HTTPException(400, "Agent 目标格式不正确")
+    if any(not isinstance(goal, str) or len(goal) > 40 for goal in requested):
+        raise HTTPException(400, "Agent 目标格式不正确")
+    agent_slot = await acquire_analysis_slot("agent")
+    try:
+        check_daily_usage()
+        plan = await asyncio.to_thread(_agent_plan, analysis, requested, cfg)
+        if not plan["steps"]:
+            raise HTTPException(422, "当前内容没有匹配到适合的 Agent 创作工具")
+        merged: dict = {}
+        trace: list[dict] = []
+        for step in plan["steps"]:
+            output = await asyncio.to_thread(_run_agent_tool, step["tool"], analysis, cfg)
+            merged.update(output)
+            trace.append({"tool": step["tool"], "reason": step["reason"], "status": "completed"})
+        quality = _agent_quality(merged, plan)
+        if not quality["passed"]:
+            raise HTTPException(502, "Agent 生成结果不完整，请稍后重试")
+        return {**merged, "agent": {"model": AGENT_MODEL, "plan": plan,
+                                      "trace": trace, "quality": quality}}
+    finally:
+        agent_slot.release()
 
 
 @app.get("/api/health")

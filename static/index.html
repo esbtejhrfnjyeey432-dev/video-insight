@@ -81,6 +81,14 @@
   .script{white-space:pre-wrap;background:#f8f9fb;border:1px solid var(--line);border-radius:10px;padding:14px;font-size:14px}
   .quotes li{list-style:none;font-size:14px;padding:5px 0 5px 20px;position:relative;color:var(--teal-d)}
   .quotes li::before{content:"「";position:absolute;left:0;top:5px;color:var(--teal)}
+  .agent-card{border:1px solid #c9dff5;background:linear-gradient(180deg,#fff,#f7fbff)}
+  .agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+  .agent-box{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fff}
+  .agent-box h3{font-size:14px;color:var(--blue-d);margin-bottom:8px}
+  .agent-box ul,.agent-box ol{padding-left:20px;font-size:13px}
+  .agent-box li{margin:5px 0}
+  .agent-text{white-space:pre-wrap;font-size:13px;line-height:1.75}
+  .agent-trace{font-size:12px;color:var(--muted);margin-top:10px}
   .err{background:#FCEBEB;border:1px solid #F09595;color:#A32D2D;border-radius:10px;padding:12px 16px;font-size:14px;margin-top:14px;display:none}
   .err button{display:block;margin-top:10px;background:#fff;border-color:#d85b5b;color:#8f2020}
   .history-list{display:grid;gap:8px}
@@ -227,6 +235,16 @@
       <div class="sec-title" style="font-size:14px;margin-top:16px">金句摘录</div>
       <ul class="quotes" id="quotes"></ul>
     </div>
+    <div class="card agent-card">
+      <div class="sec-title" style="justify-content:space-between;flex-wrap:wrap">
+        <span>Agent 深度创作 <span class="tag">动态规划 · 受控工具调用</span></span>
+        <button class="primary" id="btnAgent">自动选择创作路线</button>
+      </div>
+      <div class="note">千问会根据视频类型和当前报告，在二创包与课程包中选择真正有价值的工具；最多执行两步，避免无限调用和费用失控。</div>
+      <div id="agentStatus" class="agent-trace">尚未运行</div>
+      <div id="agentCreative" style="display:none;margin-top:14px"></div>
+      <div id="agentCourse" style="display:none;margin-top:14px"></div>
+    </div>
     <div class="card final">
       <div class="sec-title">总体总结 <span class="tag">全片综合</span></div>
       <div class="overall" id="overallSummary" data-editable="1"></div>
@@ -235,6 +253,7 @@
       <button id="btnEdit">编辑报告</button>
       <button id="btnExport">导出 Markdown</button>
       <button id="btnWord">导出 Word</button>
+      <button id="btnPpt">导出 PPT</button>
       <button id="btnPdf">导出 PDF</button>
     </div>
   </div>
@@ -781,9 +800,48 @@ function render(a){
   $("quotes").innerHTML = (r.quotes || []).map(function(q){ return '<li data-editable="1">' + esc(q) + "</li>"; }).join("");
 
   $("overallSummary").textContent = a.overall_summary || "";
+  renderAgent(a);
 
   $("result").scrollIntoView({ behavior: "smooth" });
 }
+
+function renderAgent(a){
+  var agent = a.agent || {}, plan = agent.plan || {};
+  var route = plan.route ? "路线：" + esc(plan.route) : "尚未运行";
+  var tools = (agent.trace || []).map(function(x){ return esc(x.tool) + "（" + esc(x.reason || "") + "）"; });
+  $("agentStatus").innerHTML = route + (tools.length ? "<br>已完成：" + tools.join(" → ") : "");
+  var c = a.creative || {};
+  if(Object.keys(c).length){
+    var scripts = c.scripts || {}, xhs = c.xiaohongshu || {}, voice = c.voiceover || {};
+    var html = '<div class="sec-title">多平台二创包</div><div class="agent-grid">';
+    html += '<div class="agent-box"><h3>多时长脚本</h3>' + ["15s","30s","60s","90s"].map(function(k){ return scripts[k] ? '<p class="agent-text" data-agent-path="creative.scripts.'+k+'"><b>'+k+'</b> '+esc(scripts[k])+'</p>' : ''; }).join("") + '</div>';
+    html += '<div class="agent-box"><h3>精彩片段建议</h3><ol>' + (c.highlights||[]).map(function(x){ return '<li><b>'+esc(x.start||"")+'-'+esc(x.end||"")+' '+esc(x.title||"")+'</b><br>'+esc(x.reason||"")+'<br><span class="agent-text">钩子：'+esc(x.hook||"")+'</span></li>'; }).join("") + '</ol></div>';
+    html += '<div class="agent-box"><h3>小红书文案</h3><p><b>备选标题：</b>'+esc((xhs.titles||[]).join(" / "))+'</p><p class="agent-text" data-agent-path="creative.xiaohongshu.body">'+esc(xhs.body||"")+'</p><p>'+esc((xhs.tags||[]).map(function(x){ return "#"+x; }).join(" "))+'</p></div>';
+    html += '<div class="agent-box"><h3>'+esc(voice.title||"短视频口播稿")+'</h3><p class="agent-text" data-agent-path="creative.voiceover.script">'+esc(voice.script||"")+'</p></div>';
+    html += '</div><div class="sec-title" style="margin-top:16px">分镜建议</div><div class="agent-grid">' + (c.storyboard||[]).map(function(x){ return '<div class="agent-box"><h3>镜头 '+esc(x.shot||"")+' · '+esc(x.time||"")+'</h3><p><b>画面：</b>'+esc(x.visual||"")+'</p><p><b>旁白：</b>'+esc(x.narration||"")+'</p><p><b>字幕：</b>'+esc(x.caption||"")+'</p></div>'; }).join("") + '</div>';
+    $("agentCreative").innerHTML = html; $("agentCreative").style.display = "block";
+  } else { $("agentCreative").style.display = "none"; $("agentCreative").innerHTML = ""; }
+  var course = a.course || {};
+  if(Object.keys(course).length){
+    var courseHtml = '<div class="sec-title">课程整理包</div><div class="agent-grid">';
+    courseHtml += '<div class="agent-box"><h3>学习目标</h3><ul>'+(course.learning_objectives||[]).map(function(x){ return '<li>'+esc(x)+'</li>'; }).join("")+'</ul></div>';
+    courseHtml += '<div class="agent-box"><h3>课程大纲</h3>'+(course.outline||[]).map(function(x){ return '<p><b>'+esc(x.title||"")+'</b>：'+esc((x.points||[]).join("；"))+'</p>'; }).join("")+'</div></div>';
+    courseHtml += '<div class="sec-title" style="margin-top:16px">PPT 课件与讲师备注</div><div class="agent-grid">'+(course.slides||[]).map(function(x,i){ return '<div class="agent-box"><h3>'+(i+1)+'. '+esc(x.title||"")+'</h3><ul>'+(x.bullets||[]).map(function(b){ return '<li>'+esc(b)+'</li>'; }).join("")+'</ul><p class="agent-text"><b>讲师备注：</b>'+esc(x.speaker_notes||"")+'</p></div>'; }).join("")+'</div>';
+    $("agentCourse").innerHTML = courseHtml; $("agentCourse").style.display = "block";
+  } else { $("agentCourse").style.display = "none"; $("agentCourse").innerHTML = ""; }
+}
+
+$("btnAgent").onclick = function(){
+  if(!lastResult){ toast("请先完成一次视频分析"); return; }
+  syncReportFromDom();
+  var btn = this; btn.disabled = true; btn.textContent = "Agent 正在规划与执行…";
+  $("agentStatus").textContent = "正在识别内容类型、选择工具并生成素材，请稍候…";
+  api("/api/agent/enrich", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({analysis:lastResult, goals:["auto"]})})
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail || "Agent 执行失败"); return j; }); })
+    .then(function(j){ Object.keys(j).forEach(function(k){ lastResult[k] = j[k]; }); renderAgent(lastResult); updateActiveHistory(); toast("Agent 创作包已生成"); })
+    .catch(function(err){ $("agentStatus").textContent = err.message || "Agent 执行失败，请稍后重试"; toast($("agentStatus").textContent); })
+    .finally(function(){ btn.disabled = false; btn.textContent = "重新规划创作路线"; });
+};
 
 function syncReportFromDom(){
   if(!lastResult) return;
@@ -804,6 +862,11 @@ function syncReportFromDom(){
   });
   remix.script = $("script").textContent.trim();
   remix.quotes = Array.from($("quotes").querySelectorAll("li")).map(function(x){ return x.textContent.trim(); });
+  document.querySelectorAll("[data-agent-path]").forEach(function(node){
+    var parts = node.dataset.agentPath.split("."), target = lastResult;
+    for(var i=0;i<parts.length-1;i++){ target = target[parts[i]] || (target[parts[i]] = {}); }
+    target[parts[parts.length-1]] = node.textContent.replace(/^\s*(15s|30s|60s|90s)\s*/, "").trim();
+  });
   lastResult.overall_summary = $("overallSummary").textContent.trim();
 }
 
@@ -811,6 +874,9 @@ $("btnEdit").onclick = function(){
   if(!lastResult){ toast("请先完成一次解析"); return; }
   reportEditing = !reportEditing;
   document.querySelectorAll("#result [data-editable]").forEach(function(node){
+    node.setAttribute("contenteditable", reportEditing ? "true" : "false");
+  });
+  document.querySelectorAll("#result [data-agent-path]").forEach(function(node){
     node.setAttribute("contenteditable", reportEditing ? "true" : "false");
   });
   this.textContent = reportEditing ? "保存修改" : "编辑报告";
@@ -844,6 +910,22 @@ function buildMarkdown(a){
   md.push("\n### 60 秒口播脚本\n" + (r.script || ""));
   md.push("\n### 金句摘录");
   (r.quotes || []).forEach(function(q){ md.push("> " + q); });
+  var c = a.creative || {};
+  if(Object.keys(c).length){
+    md.push("\n## Agent 二创包");
+    Object.keys(c.scripts||{}).forEach(function(k){ md.push("\n### " + k + " 脚本\n" + c.scripts[k]); });
+    md.push("\n### 精彩片段建议");
+    (c.highlights||[]).forEach(function(x){ md.push("- **"+(x.start||"")+"-"+(x.end||"")+" "+(x.title||"")+"**："+(x.reason||"")+"；钩子："+(x.hook||"")); });
+    md.push("\n### 分镜建议");
+    (c.storyboard||[]).forEach(function(x){ md.push("- 镜头 "+(x.shot||"")+"（"+(x.time||"")+"）：画面 "+(x.visual||"")+"；旁白 "+(x.narration||"")+"；字幕 "+(x.caption||"")); });
+    var xhs=c.xiaohongshu||{}; md.push("\n### 小红书文案\n"+(xhs.body||"")+"\n\n"+(xhs.tags||[]).map(function(x){return "#"+x;}).join(" "));
+  }
+  var course=a.course||{};
+  if(Object.keys(course).length){
+    md.push("\n## 课程整理包\n\n### 学习目标"); (course.learning_objectives||[]).forEach(function(x){md.push("- "+x);});
+    md.push("\n### 课程大纲"); (course.outline||[]).forEach(function(x){md.push("- **"+(x.title||"")+"**："+(x.points||[]).join("；"));});
+    md.push("\n### PPT 课件与讲师备注"); (course.slides||[]).forEach(function(x,i){md.push("\n#### "+(i+1)+". "+(x.title||"")+"\n"+(x.bullets||[]).map(function(b){return "- "+b;}).join("\n")+"\n\n讲师备注："+(x.speaker_notes||""));});
+  }
   if(a.overall_summary) md.push("\n## 总体总结\n" + a.overall_summary);
   return md.join("\n");
 }
@@ -869,6 +951,10 @@ function reportHtml(a){
   html += '<h2>Remix 衍生创作</h2>' + (r.cards||[]).map(function(c){ return '<h3>' + esc(c.title) + '</h3><p>' + esc(c.desc) + '</p>'; }).join("");
   html += '<h3>60 秒口播脚本</h3><p>' + esc(r.script||"").replace(/\n/g,"<br>") + '</p>';
   html += '<h3>金句摘录</h3>' + list(r.quotes);
+  var c=a.creative||{};
+  if(Object.keys(c).length){ html += '<h2>Agent 二创包</h2>'; Object.keys(c.scripts||{}).forEach(function(k){html+='<h3>'+esc(k)+' 脚本</h3><p>'+esc(c.scripts[k])+'</p>';}); html += '<h3>小红书文案</h3><p>'+esc((c.xiaohongshu||{}).body||'').replace(/\n/g,'<br>')+'</p>'; }
+  var course=a.course||{};
+  if(Object.keys(course).length){ html += '<h2>课程整理包</h2><h3>学习目标</h3>'+list(course.learning_objectives)+'<h3>课程大纲</h3>'+(course.outline||[]).map(function(x){return '<p><b>'+esc(x.title||'')+'</b>：'+esc((x.points||[]).join('；'))+'</p>';}).join('')+'<h3>PPT 课件与讲师备注</h3>'+(course.slides||[]).map(function(x,i){return '<h4>'+(i+1)+'. '+esc(x.title||'')+'</h4>'+list(x.bullets)+'<p><b>讲师备注：</b>'+esc(x.speaker_notes||'')+'</p>';}).join(''); }
   html += '<h2>总体总结</h2><p>' + esc(a.overall_summary||"") + '</p>';
   return html;
 }
@@ -883,6 +969,15 @@ $("btnWord").onclick = function(){
   syncReportFromDom();
   var doc = '<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Microsoft YaHei,sans-serif;line-height:1.7;padding:36px}h1{color:#0C447C}h2{margin-top:24px;color:#185FA5}li{margin:6px 0}</style></head><body>' + reportHtml(lastResult) + '</body></html>';
   downloadBlob(new Blob(["\ufeff" + doc], {type:"application/msword"}), safeFilename(lastResult.title) + ".doc");
+};
+$("btnPpt").onclick = function(){
+  if(!lastResult){ toast("请先完成一次解析"); return; }
+  syncReportFromDom();
+  var course=lastResult.course||{};
+  if(!(course.slides||[]).length){ toast("请先运行 Agent 生成课程课件"); return; }
+  var slides=(course.slides||[]).map(function(x,i){ return '<section style="page-break-after:always;width:960px;height:540px;padding:54px;box-sizing:border-box"><h1 style="color:#185FA5">'+(i+1)+'. '+esc(x.title||'')+'</h1><ul style="font-size:24px;line-height:1.7">'+(x.bullets||[]).map(function(b){return '<li>'+esc(b)+'</li>';}).join('')+'</ul><aside style="margin-top:24px;border-top:1px solid #ddd;padding-top:12px;color:#666"><b>讲师备注：</b>'+esc(x.speaker_notes||'')+'</aside></section>'; }).join('');
+  var ppt='<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:Microsoft YaHei,sans-serif">'+slides+'</body></html>';
+  downloadBlob(new Blob(["\ufeff"+ppt],{type:"application/vnd.ms-powerpoint"}),safeFilename(lastResult.title)+"-课件.ppt");
 };
 $("btnPdf").onclick = function(){
   if(!lastResult){ toast("请先完成一次解析"); return; }
