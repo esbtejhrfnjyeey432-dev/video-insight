@@ -86,8 +86,6 @@ def _env_flag(name: str, default: bool) -> bool:
 PUBLIC_MODE = _env_flag("VI_PUBLIC", True)
 ENABLE_DEBUG_ENDPOINTS = _env_flag("VI_ENABLE_DEBUG", not DEPLOY_MODE)
 SERVICE_VERSION = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("VI_VERSION", "dev"))[:12]
-CREATIVE_BUILDER_ENABLED = _env_flag("VI_CREATIVE_BUILDER_ENABLED", False)
-CREATIVE_BUILDER_URL = os.environ.get("VI_CREATIVE_BUILDER_URL", "http://127.0.0.1:3188").rstrip("/")
 
 API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
@@ -1292,50 +1290,8 @@ def status():
         "max_frames": MAX_FRAMES,
         "frame_concurrency": MAX_FRAME_CONCURRENT,
         "link_concurrency": MAX_LINK_CONCURRENT,
-        # 可选辅助引擎默认关闭；关闭时原二创流程完全不变。
-        "creative_builder_enabled": CREATIVE_BUILDER_ENABLED,
         "version": SERVICE_VERSION,
     }
-
-
-@app.post("/api/generate")
-async def generate_video(
-    payload: dict = Body(...),
-    _code: None = Depends(require_code),
-):
-    """把可选成片任务转给仅监听内网的 Node 辅助服务。"""
-    scene = "remix" if payload.get("scene") == "creative" else payload.get("scene")
-    if scene == "course":
-        return {"delegated": True, "scene": "course", "message": "继续使用原课程复盘流程"}
-    if scene != "remix":
-        raise HTTPException(400, "scene 只支持 course 或 remix")
-    if not CREATIVE_BUILDER_ENABLED:
-        raise HTTPException(503, detail={"reason": "智能成片辅助服务尚未启用", "fallback": "原脚本、分镜和提示词工作台可继续使用"})
-    try:
-        response = await asyncio.to_thread(requests.post, f"{CREATIVE_BUILDER_URL}/api/generate", json=payload, timeout=15)
-        data = response.json()
-        if response.status_code >= 400:
-            raise HTTPException(response.status_code, data.get("detail", "成片任务提交失败"))
-        return data
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.warning("creative_builder_unavailable reason=%s", exc)
-        raise HTTPException(503, detail={"reason": "智能成片辅助服务暂不可用", "fallback": "原脚本、分镜和提示词工作台可继续使用"})
-
-
-@app.get("/api/generate/{video_id}")
-async def generate_video_status(video_id: str, _code: None = Depends(require_code)):
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", video_id):
-        raise HTTPException(400, "任务编号格式不正确")
-    if not CREATIVE_BUILDER_ENABLED:
-        raise HTTPException(503, "智能成片辅助服务尚未启用")
-    try:
-        response = await asyncio.to_thread(requests.get, f"{CREATIVE_BUILDER_URL}/api/generate/{video_id}", timeout=10)
-        return JSONResponse(status_code=response.status_code, content=response.json())
-    except Exception as exc:
-        logger.warning("creative_builder_status_unavailable reason=%s", exc)
-        raise HTTPException(503, "智能成片任务状态暂不可用")
 
 
 @app.post("/api/config")

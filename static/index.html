@@ -329,11 +329,6 @@
         <h3>05 / 视频提示词包</h3><p>系统会按分镜顺序将连续镜头组合成所选时长，供后续视频生成工具继续使用。</p>
         <div class="work-output" id="promptOutput"></div>
       </div>
-      <div class="work-panel" id="builderPanel" style="display:none">
-        <h3>06 / 智能成片 <span class="tag">实验功能</span></h3>
-        <p>系统会在服务端根据脚本、章节和分镜自动规划、校验并构建竖屏视频；原有脚本、分镜和提示词不会被覆盖。</p>
-        <div class="work-actions"><button class="primary" id="btnBuildRemix">生成二创成片</button><span class="tip" id="builderStatus">尚未开始</span></div>
-      </div>
     </div>
     <div class="card agent-card" id="agentCard" style="display:none">
       <div class="sec-title" style="justify-content:space-between;flex-wrap:wrap">
@@ -545,7 +540,6 @@ function loadStatus(attempt){
   attempt = attempt || 0;
   fetchWithTimeout(API_BASE + "/api/status", {}, 30000).then(function(r){ return r.json(); }).then(function(s){
   window.APP_STATUS = s;
-  if(s.creative_builder_enabled && $("builderPanel")) $("builderPanel").style.display = "block";
   s.models.forEach(function(m){
     var o = document.createElement("option"); o.value = m; o.textContent = m;
     if(m === s.model) o.selected = true;
@@ -1153,26 +1147,6 @@ function renderVideoPrompts(rows){
   $("promptPanel").style.display="block";setWorkbenchStep(5);$("promptPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("btnVideoPrompts").onclick=function(){var btn=this;callWorkbench("prompts",btn).then(function(j){creativeWorkspace.prompts=j.video_prompts||[];hideCreativeFailure();renderVideoPrompts(creativeWorkspace.prompts);toast("视频提示词包已生成");}).catch(function(e){showCreativeFailure("prompts",e);toast("提示词生成失败，脚本和分镜已经保留");});};
-function pollBuilderTask(videoId){
-  api("/api/generate/"+encodeURIComponent(videoId)).then(function(task){
-    var stateText={pending:"等待处理",building:"生成中",ready:"可下载",failed:"未完成"};
-    $("builderStatus").textContent="二创任务："+(stateText[task.state]||task.state)+(task.message?" · "+task.message:"");
-    if(task.state==="pending"||task.state==="building") setTimeout(function(){pollBuilderTask(videoId);},2500);
-    if(task.state==="failed") toast((task.error&&task.error.reason)||"成片未完成，原有二创结果已保留");
-    if(task.state==="ready"){setWorkbenchStep(6);toast("二创成片已完成");}
-  }).catch(function(e){$("builderStatus").textContent="状态查询失败，原有结果不受影响";toast(friendlyError(e.message||String(e),503));});
-}
-$("btnBuildRemix").onclick=function(){
-  if(!creativeWorkspace.script){toast("请先生成并确认新脚本");return;}
-  syncWorkbenchScript();
-  var rows=(((creativeWorkspace.script||{}).script||{}).shots||[]), id="remix-"+Date.now().toString(36);
-  var chapters=rows.map(function(x,i){return {t:Number(x.start)||0,title:x.visual||x.shot_type||("镜头"+(i+1))};});
-  var transcript=rows.map(function(x){return x.dialogue||"";}).filter(Boolean).join(" ");
-  var payload={scene:"remix",mode:"standard",videoId:id,transcript:transcript,chapters:chapters,remixOptions:{keepStructure:true,newHook:rows[0]&&rows[0].dialogue||"",product:((creativeWorkspace.script.product_profiles||[])[0]||{}).name||"新产品",person:((creativeWorkspace.script.role_profiles||[])[0]||{}).name||"新人物",language:"zh",cta:"",platform:"douyin",broll:(creativeWorkspace.storyboard||[]).map(function(x){return x.edit_plan||x.image_prompt||"";}).filter(Boolean)}};
-  var btn=this;btn.disabled=true;$("builderStatus").textContent="正在提交任务";
-  api("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then(function(task){btn.disabled=false;$("builderStatus").textContent="二创任务：等待处理";pollBuilderTask(task.id||id);}).catch(function(e){btn.disabled=false;$("builderStatus").textContent="智能成片暂不可用，原脚本、分镜和提示词均已保留";toast(friendlyError(e.message||String(e),503));});
-};
-
 function syncReportFromDom(){
   if(!lastResult) return;
   lastResult.title = ($("reportTitle") || {}).textContent || lastResult.title;

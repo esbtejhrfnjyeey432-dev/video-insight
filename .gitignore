@@ -16,9 +16,3 @@ slides.txt
 sample_lesson.mp4
 demo-dist/
 .venv/
-node_modules/
-data/queue/
-data/runs/
-data/svml/
-data/outputs/
-.hypit/

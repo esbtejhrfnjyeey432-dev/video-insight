@@ -6,16 +6,15 @@
 services:
   - type: web
     name: video-insight
-    runtime: docker
+    runtime: python
     plan: free
     region: singapore            # 新加坡节点，访问国内视频平台延迟较低
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /api/ready
     envVars:
-      # 已安装不等于已验证。真实出片通过前保持关闭，前端不会显示入口。
-      - key: VI_CREATIVE_BUILDER_ENABLED
-        value: "false"
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: VI_API_KEY
         sync: false              # 敏感值：部署时在 Render 网页填写（阿里百炼 Key）
       # 公开模式：任何人打开链接即可直接使用，无需访问码
