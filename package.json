@@ -1,0 +1,9 @@
+{
+  "name": "video-insight-creative-builder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VideoInsight 可选二创视频构建辅助服务",
+  "engines": { "node": ">=22.15" },
+  "scripts": { "start:builder": "node src/server.js", "test:builder": "node --test test_hypit_backend.js" },
+  "dependencies": { "@hypit/hypit": "0.2.12" }
+}

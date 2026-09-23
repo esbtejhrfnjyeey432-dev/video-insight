@@ -1,0 +1,41 @@
+<?svml using="@hypit/markup@1"?>
+<svml>
+  <import as="sound" from="@hypit/sound@1"/>
+  <import as="performance" from="@hypit/performance@1"/>
+  <import from="@hypit/script@1"/>
+  <import as="text" from="@hypit/text@1"/>
+  <import as="seedance" from="@hypit/seedance@1"/>
+  <import as="pipeline" from="@hypit/media-pipeline@1"/>
+  <import as="whisperx" from="@hypit/whisperx@1"/>
+  <import as="time" from="@hypit/timeline-author@1"/>
+  <import as="space" from="@hypit/spatial@1"/>
+  <import as="program" from="@hypit/program-space@1"/>
+  <import as="film" from="@hypit/film@1"/>
+  <import as="render" from="@hypit/render-hyperframes@1"/>
+  <import as="look" source="./look.svs"/>
+  <import as="kit" source="./direction.svs"/>
+  <script id="story">
+    <hook><HOST>@{chapter-1}别再手抄笔记了。虚拟主播小知介绍 AI 笔记 App。@{/chapter-1}</HOST></hook>
+    <pain><HOST>@{chapter-2}课程太长抓不住重点？系统按章节整理关键内容。左下角免费体验。@{/chapter-2}</HOST></pain>
+  </script>
+  <space:Canvas id="canvas" width="720" height="1280"/>
+  <program:Clock id="clock" frame-rate="30"/>
+  <space:Frame id="full" within={canvas} left="0%" top="0%" right="100%" bottom="100%"/>
+  <text:Value id="direction-1">竖屏口播，人物为虚拟主播小知，展示 AI 笔记 App 产品界面。</text:Value>
+  <text:Render id="prompt-1" template={kit.performance}><text:Set name="direction" text={direction-1}/><text:Set name="dialogue" text={story.segment.hook.dialogue}/></text:Render>
+  <seedance:TextVideo id="performance-1" model="mini" prompt={prompt-1} duration="8" aspect-ratio="9:16" generate-audio="true"/>
+  <pipeline:Normalize id="media-1" source={performance-1.video} clock={clock} video="primary-moving" audio="default" span-authority="video"/>
+  <whisperx:SemanticTake id="take-1" narrative={story} segment={story.segment.hook} media={media-1.media} language="zh"/>
+  <text:Value id="direction-2">延续同一人物和画风，插入用户惊讶与整理前后对比图。</text:Value>
+  <text:Render id="prompt-2" template={kit.performance}><text:Set name="direction" text={direction-2}/><text:Set name="dialogue" text={story.segment.pain.dialogue}/></text:Render>
+  <seedance:TextVideo id="performance-2" model="mini" prompt={prompt-2} duration="8" aspect-ratio="9:16" generate-audio="true"/>
+  <pipeline:Normalize id="media-2" source={performance-2.video} clock={clock} video="primary-moving" audio="default" span-authority="video"/>
+  <whisperx:SemanticTake id="take-2" narrative={story} segment={story.segment.pain} media={media-2.media} language="zh"/>
+  <time:Timeline id="program" clock={clock}><time:Take source={take-1.take}/><time:Take source={take-2.take}/></time:Timeline>
+  <sound:Style id="voice-style"/>
+  <sound:Track id="voice" timeline={program.timeline}><sound:Use style={voice-style}/></sound:Track>
+  <performance:Style id="picture-style" frame={full} appearance={look.media.performance}/>
+  <performance:Track id="picture" timeline={program.timeline} canvas={canvas}><performance:Use style={picture-style} during="program"/></performance:Track>
+  <film:Film id="main" canvas={canvas} timeline={program.timeline} appearance={look.film.main}><film:Track source={picture.visual}/><film:Track source={voice.audio}/></film:Film>
+  <render:Video id="final" composition={main.composition} timeline={program.timeline}/>
+</svml>

@@ -1,0 +1,14 @@
+{
+  "format": "hypit.runtime-local@1",
+  "dataRoot": ".hypit/execution",
+  "credentials": {},
+  "endpoints": {
+    "media.local": { "use": "@hypit/provider-media-local" },
+    "whisperx.local": {
+      "use": "@hypit/provider-whisperx-local",
+      "config": { "expectedModel": "small", "expectedDevice": "cpu", "expectedCompute": "int8", "alignmentLanguages": ["zh", "en"] }
+    },
+    "hyperframes.local": { "use": "@hypit/provider-hyperframes-local" }
+  },
+  "bindings": { "@hypit/whisperx@1#whisperx-alignment": "whisperx.local" }
+}
