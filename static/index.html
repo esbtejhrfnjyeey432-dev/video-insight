@@ -153,6 +153,7 @@
   .shot-item{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}.shot-item img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#edf1f5;display:block}
   .shot-placeholder{aspect-ratio:16/9;background:#edf3f8;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:12px}
   .shot-body{padding:9px;font-size:12px}.shot-time{color:var(--blue-d);font-weight:700}.shot-dialogue{margin-top:5px;color:#4d5965;min-height:38px}
+  .contact-sheet{margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}.contact-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}.contact-sheet-head p{font-size:12px;color:var(--muted);margin-top:3px}.contact-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.contact-cell{position:relative;aspect-ratio:1/1;overflow:hidden;border-radius:7px;background:#17212b;color:#fff}.contact-cell img{width:100%;height:100%;object-fit:cover}.contact-label{position:absolute;left:0;right:0;bottom:0;padding:18px 7px 6px;background:linear-gradient(transparent,rgba(0,0,0,.82));font-size:11px}.plan-grids{display:grid;gap:12px;margin-top:12px}.plan-grid-card{padding:12px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}.plan-grid-title{font-size:13px;font-weight:700;color:var(--blue-d);margin-bottom:8px}.plan-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.plan-cell{min-height:105px;padding:8px;border:1px solid #ccd6e1;border-radius:7px;background:#fff;font-size:11px;line-height:1.5}.plan-cell b{display:block;color:var(--blue-d);margin-bottom:3px}.plan-cell.empty{background:#f1f3f5;color:#9aa3ad;display:flex;align-items:center;justify-content:center}
   .asset-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.asset-toolbar label{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;background:#fff}.asset-toolbar input{display:none}
   .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:10px 0}.asset-card{border:1px solid var(--line);border-radius:9px;padding:8px;background:#fff}.asset-card.hidden{opacity:.45}.asset-card img{width:100%;height:105px;object-fit:cover;border-radius:6px;background:#edf1f5}.asset-card input{width:100%;border:0;border-bottom:1px solid var(--line);padding:5px 2px;font:inherit;font-size:12px}.asset-actions{display:flex;gap:5px;margin-top:6px}.asset-actions button{padding:4px 7px;font-size:11px;flex:1}
   .work-textarea{width:100%;min-height:88px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;resize:vertical}.work-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
@@ -299,6 +300,10 @@
         <div class="work-actions"><button class="primary" id="btnDeconstruct">开始深度拆解</button><span class="tip" id="deconstructStatus"></span></div>
         <div class="work-output" id="understandingOutput"></div>
         <div class="shot-grid" id="deconstructShots"></div>
+        <div class="contact-sheet" id="contactSheetPanel" style="display:none">
+          <div class="contact-sheet-head"><div><b>原片九宫格参考图</b><p>由原视频真实关键帧在浏览器本地合成，不调用生图模型，也不代表新画面已经生成。</p></div><button id="btnDownloadContactSheet">下载九宫格 PNG</button></div>
+          <div class="contact-grid" id="contactSheetGrid"></div>
+        </div>
       </div>
       <div class="work-panel">
         <h3>02 / 准备人物、产品与场景资产</h3>
@@ -421,6 +426,7 @@ function resetCreativeWorkspace(){
   creativeWorkspace={deconstruction:null,assets:[],script:null,storyboard:[],prompts:[]};
   ["deconstructShots","assetGrid","scriptOutput","storyboardOutput","promptOutput"].forEach(function(id){if($(id))$(id).innerHTML="";});
   ["scriptPanel","storyboardPanel","promptPanel"].forEach(function(id){if($(id))$(id).style.display="none";});
+  if($("contactSheetPanel"))$("contactSheetPanel").style.display="none";
   if($("deconstructStatus"))$("deconstructStatus").textContent="";
   if($("creativeFailure"))$("creativeFailure").style.display="none";
   document.querySelectorAll(".work-step").forEach(function(node,i){node.classList.toggle("ready",i===0);});
@@ -1002,6 +1008,38 @@ function showCreativeWarning(message){
 function setWorkbenchStep(count){
   document.querySelectorAll(".work-step").forEach(function(node, i){ node.classList.toggle("ready", i < count); });
 }
+function contactSheetShots(data){
+  var source=(data&&data.shots||[]).filter(function(x){return x&&x.image;});
+  if(source.length<=9)return source;
+  var picked=[];
+  for(var i=0;i<9;i++)picked.push(source[Math.round(i*(source.length-1)/8)]);
+  return picked;
+}
+function renderContactSheet(data){
+  var shots=contactSheetShots(data),panel=$("contactSheetPanel"),grid=$("contactSheetGrid");
+  if(!shots.length){panel.style.display="none";grid.innerHTML="";return;}
+  grid.innerHTML=shots.map(function(shot,i){return '<div class="contact-cell"><img src="'+esc(shot.image)+'" alt="参考镜头 '+(i+1)+'"><div class="contact-label">'+String(i+1).padStart(2,"0")+' · '+secondsLabel(shot.start)+'</div></div>';}).join("");
+  panel.style.display="block";
+}
+function loadCanvasImage(src){
+  return new Promise(function(resolve,reject){var img=new Image();img.onload=function(){resolve(img);};img.onerror=function(){reject(new Error("关键帧图片读取失败"));};img.src=src;});
+}
+function drawCover(ctx,img,x,y,w,h){
+  var scale=Math.max(w/img.width,h/img.height),sw=w/scale,sh=h/scale,sx=(img.width-sw)/2,sy=(img.height-sh)/2;
+  ctx.drawImage(img,sx,sy,sw,sh,x,y,w,h);
+}
+$("btnDownloadContactSheet").onclick=async function(){
+  var shots=contactSheetShots(creativeWorkspace.deconstruction),btn=this;
+  if(!shots.length){toast("请先完成原片深度拆解");return;}
+  btn.disabled=true;var old=btn.textContent;btn.textContent="正在生成…";
+  try{
+    var size=1080,gap=9,cell=(size-gap*4)/3,canvas=document.createElement("canvas");canvas.width=size;canvas.height=size;
+    var ctx=canvas.getContext("2d");ctx.fillStyle="#101820";ctx.fillRect(0,0,size,size);
+    var images=await Promise.all(shots.map(function(x){return loadCanvasImage(x.image);}));
+    images.forEach(function(img,i){var col=i%3,row=Math.floor(i/3),x=gap+col*(cell+gap),y=gap+row*(cell+gap);drawCover(ctx,img,x,y,cell,cell);var grad=ctx.createLinearGradient(0,y+cell*.68,0,y+cell);grad.addColorStop(0,"rgba(0,0,0,0)");grad.addColorStop(1,"rgba(0,0,0,.86)");ctx.fillStyle=grad;ctx.fillRect(x,y+cell*.62,cell,cell*.38);ctx.fillStyle="#fff";ctx.font="bold 28px sans-serif";ctx.fillText(String(i+1).padStart(2,"0")+"  "+secondsLabel(shots[i].start),x+18,y+cell-20);});
+    var a=document.createElement("a");a.href=canvas.toDataURL("image/png");a.download="原片九宫格参考图.png";a.click();toast("九宫格参考图已生成");
+  }catch(e){toast(e.message||"九宫格生成失败");}finally{btn.disabled=false;btn.textContent=old;}
+};
 function renderDeconstruction(data){
   var shots = data && data.shots || [];
   $("deconstructShots").innerHTML = shots.map(function(shot){
@@ -1010,6 +1048,7 @@ function renderDeconstruction(data){
       '<div class="shot-body"><div class="shot-time">镜头 '+esc(shot.shot)+' · '+secondsLabel(shot.start)+'–'+secondsLabel(shot.end)+'</div>'+
       '<div class="shot-dialogue">'+esc(shot.dialogue || "（此镜头未识别到台词）")+'</div></div></div>';
   }).join("");
+  renderContactSheet(data);
   var u=data.understanding||{},cal=u.speaker_calibration||[],unknown=cal.filter(function(x){return x.speaker==="待确认"||Number(x.confidence)<.6;}).length;
   var people=(u.characters||[]).map(function(x){return '<li><b>'+esc(x.name||x.id||"人物")+'</b> · '+esc(x.identity||"")+' · '+esc(x.personality||"")+' · '+esc(x.appearance||"")+'</li>';}).join("");
   var relations=(u.relationships||[]).map(function(x){return '<li>'+esc(x.from||"")+' → '+esc(x.to||"")+'：'+esc(x.relationship||"")+'；变化：'+esc(x.changes||"无")+'</li>';}).join("");
@@ -1140,7 +1179,15 @@ $("btnNewScript").onclick=function(){
   var btn=this; callWorkbench("script",btn).then(function(j){creativeWorkspace.script=j;hideCreativeFailure();renderNewScript(j);toast("新脚本已生成，可直接修改");}).catch(function(e){fallbackScript();showCreativeWarning("AI脚本暂未完整返回，已根据现有镜头建立可编辑脚本，可继续修改或重新生成。");});
 };
 function renderStoryboard(rows){
-  $("storyboardOutput").innerHTML='<table><thead><tr><th>分镜组</th><th>时间</th><th>素材</th><th>连续性</th><th>九宫格规划</th></tr></thead><tbody>'+rows.map(function(x){var panels=(x.panels||[]).map(function(p){return p.panel+". "+(p.shot_size||"")+" "+(p.visual||"")+" "+(p.emotion_action||"");}).join("；");return '<tr><td>第 '+esc(x.group||x.shot)+' 组</td><td>'+esc(x.time||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td><td>'+esc((x.continuity_in||"")+" → "+(x.continuity_out||""))+'</td><td>'+esc(panels||x.grid_prompt||x.image_prompt||"")+'</td></tr>';}).join("")+'</tbody></table>';
+  var table='<table><thead><tr><th>分镜组</th><th>时间</th><th>素材</th><th>连续性</th><th>九宫格规划</th></tr></thead><tbody>'+rows.map(function(x){var panels=(x.panels||[]).map(function(p){return p.panel+". "+(p.shot_size||"")+" "+(p.visual||"")+" "+(p.emotion_action||"");}).join("；");return '<tr><td>第 '+esc(x.group||x.shot)+' 组</td><td>'+esc(x.time||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td><td>'+esc((x.continuity_in||"")+" → "+(x.continuity_out||""))+'</td><td>'+esc(panels||x.grid_prompt||x.image_prompt||"")+'</td></tr>';}).join("")+'</tbody></table>';
+  var grids='<div class="plan-grids">'+rows.map(function(x,index){
+    var panels=(x.panels||[]).slice(0,9),cells=[];
+    if(!panels.length)panels=[{panel:1,shot_size:"规划",visual:x.image_prompt||x.edit_plan||x.grid_prompt||"待补充分镜画面",dialogue:""}];
+    panels.forEach(function(p,i){cells.push('<div class="plan-cell"><b>'+(p.panel||i+1)+' · '+esc(p.shot_size||"镜头")+'</b>'+esc(p.visual||"")+(p.emotion_action?'<br>'+esc(p.emotion_action):'')+(p.dialogue?'<br>台词：'+esc(p.dialogue):'')+'</div>');});
+    while(cells.length<9)cells.push('<div class="plan-cell empty">待生成画面</div>');
+    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 九宫格分镜规划（文字预演）</div><div class="plan-grid">'+cells.join("")+'</div></div>';
+  }).join("")+'</div>';
+  $("storyboardOutput").innerHTML=table+grids;
   $("storyboardPanel").style.display="block";setWorkbenchStep(4);$("storyboardPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("btnStoryboard").onclick=function(){syncWorkbenchScript();var btn=this;callWorkbench("storyboard",btn).then(function(j){creativeWorkspace.storyboard=j.storyboard||[];hideCreativeFailure();renderStoryboard(creativeWorkspace.storyboard);toast("分镜改造方案已生成");}).catch(function(e){showCreativeFailure("storyboard",e);toast("分镜生成失败，新脚本已经保留");});};
