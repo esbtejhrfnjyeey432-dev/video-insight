@@ -141,7 +141,21 @@
   .use-case h3{font-size:14px;color:var(--blue-d);margin-bottom:3px}
   .use-case p{font-size:12.5px;color:var(--muted);line-height:1.65}
   .use-case-note{font-size:12px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
-  @media(max-width:600px){.use-case-grid,.scenario-grid{grid-template-columns:1fr}.use-cases{padding:18px}.hero{padding:22px}.hero h1{font-size:22px}}
+  .workbench{border-color:#b9d5ef;background:linear-gradient(180deg,#fff,#f7fbff)}
+  .work-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:12px 0 18px}
+  .work-step{padding:9px 6px;border:1px solid var(--line);border-radius:8px;text-align:center;font-size:12px;background:#fff;color:var(--muted)}
+  .work-step.ready{border-color:#83b6e3;background:var(--blue-l);color:var(--blue-d);font-weight:700}
+  .work-panel{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}
+  .work-panel h3{font-size:15px;margin-bottom:5px}.work-panel>p{font-size:12px;color:var(--muted);margin-bottom:12px}
+  .shot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:12px}
+  .shot-item{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}.shot-item img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#edf1f5;display:block}
+  .shot-body{padding:9px;font-size:12px}.shot-time{color:var(--blue-d);font-weight:700}.shot-dialogue{margin-top:5px;color:#4d5965;min-height:38px}
+  .asset-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.asset-toolbar label{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;background:#fff}.asset-toolbar input{display:none}
+  .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:10px 0}.asset-card{border:1px solid var(--line);border-radius:9px;padding:8px;background:#fff}.asset-card.hidden{opacity:.45}.asset-card img{width:100%;height:105px;object-fit:cover;border-radius:6px;background:#edf1f5}.asset-card input{width:100%;border:0;border-bottom:1px solid var(--line);padding:5px 2px;font:inherit;font-size:12px}.asset-actions{display:flex;gap:5px;margin-top:6px}.asset-actions button{padding:4px 7px;font-size:11px;flex:1}
+  .work-textarea{width:100%;min-height:88px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;resize:vertical}.work-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .work-output{margin-top:12px}.work-output table{width:100%;border-collapse:collapse;font-size:12px}.work-output th,.work-output td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}.work-output th{background:#f4f7fa}.work-output td[contenteditable="true"]{background:#fffdf1}
+  .privacy-line{font-size:12px;color:#6b5320;background:#fff8e8;border:1px solid #efddb1;border-radius:8px;padding:9px 11px}
+  @media(max-width:600px){.use-case-grid,.scenario-grid{grid-template-columns:1fr}.use-cases{padding:18px}.hero{padding:22px}.hero h1{font-size:22px}.work-steps{grid-template-columns:1fr 1fr}.work-output{overflow-x:auto}.work-output table{min-width:680px}}
 </style>
 <script>window.VI_API_BASE = "https://video-insight-9q9i.onrender.com";</script>
 </head>
@@ -265,6 +279,45 @@
       <div class="sec-title" style="font-size:14px;margin-top:16px">金句摘录</div>
       <ul class="quotes" id="quotes"></ul>
     </div>
+    <div class="card workbench" id="creativeWorkbench" style="display:none">
+      <div class="sec-title">电商短剧再创作工作台 <span class="tag">二次创作模式</span></div>
+      <div class="work-steps">
+        <div class="work-step ready">01 原片拆解</div><div class="work-step">02 人物与产品</div>
+        <div class="work-step">03 新脚本</div><div class="work-step">04 分镜方案</div><div class="work-step">05 视频提示词</div>
+      </div>
+      <div class="privacy-line">深度拆解需临时上传原视频：FFmpeg 在应用后端提取镜头和音轨，音轨交由百炼识别台词；任务结束后立即删除临时文件。基础解析仍保持仅上传关键帧。</div>
+      <div class="work-panel">
+        <h3>01 / 拆解原片</h3>
+        <p>识别镜头切换点、关键帧和带起止时间的台词，形成后续可复用的短句拆解包。暂支持 30 分钟、300MB 以内本地视频。</p>
+        <div class="work-actions"><button class="primary" id="btnDeconstruct">开始深度拆解</button><span class="tip" id="deconstructStatus"></span></div>
+        <div class="shot-grid" id="deconstructShots"></div>
+      </div>
+      <div class="work-panel">
+        <h3>02 / 上传替换素材</h3>
+        <p>可上传多个人物和产品参考图；不参与本轮的素材可以隐藏，也可以删除。</p>
+        <div class="asset-toolbar">
+          <label>＋ 添加人物图<input id="personAssets" type="file" accept="image/*" multiple></label>
+          <label>＋ 添加产品图<input id="productAssets" type="file" accept="image/*" multiple></label>
+        </div>
+        <div class="asset-grid" id="assetGrid"></div>
+        <textarea class="work-textarea" id="creativeRequirements" placeholder="描述本次改编要求，例如：把原片中的人物替换为上传的三位角色，把原产品替换为新产品，保留快节奏反转结构，台词更生活化。"></textarea>
+        <div class="work-actions"><button id="btnVoiceRequirement">语音输入要求</button><button class="primary" id="btnNewScript">识别素材并生成新脚本</button></div>
+      </div>
+      <div class="work-panel" id="scriptPanel" style="display:none">
+        <h3>03 / 新短剧脚本</h3><p>保留原片的时间结构与镜头逻辑，人物、产品和台词按本次素材重新创作。表格内容可直接修改。</p>
+        <div class="work-output" id="scriptOutput"></div>
+        <div class="work-actions"><button class="primary" id="btnStoryboard">生成分镜改造方案</button></div>
+      </div>
+      <div class="work-panel" id="storyboardPanel" style="display:none">
+        <h3>04 / 分镜改造方案</h3><p>逐镜头给出素材引用、画面替换方法和生图提示词；当前版本输出可执行方案，不会伪装成已生成图片。</p>
+        <div class="work-output" id="storyboardOutput"></div>
+        <div class="work-actions"><select id="targetDuration"><option value="10">单段 10 秒</option><option value="15" selected>单段 15 秒</option><option value="30">单段 30 秒</option></select><button class="primary" id="btnVideoPrompts">生成视频提示词</button></div>
+      </div>
+      <div class="work-panel" id="promptPanel" style="display:none">
+        <h3>05 / 视频提示词包</h3><p>系统会按分镜顺序将连续镜头组合成所选时长，供后续视频生成工具继续使用。</p>
+        <div class="work-output" id="promptOutput"></div>
+      </div>
+    </div>
     <div class="card agent-card" id="agentCard" style="display:none">
       <div class="sec-title" style="justify-content:space-between;flex-wrap:wrap">
         <span id="agentTitle">场景成果 <span class="tag">AI 自动整理</span></span>
@@ -351,7 +404,15 @@ var $ = function(id){ return document.getElementById(id); };
 var currentFile = null, currentTab = "upload", lastResult = null, timer = null;
 var activeSourceUrl = "", activeSourceType = "", activeSourceName = "", previewObjectUrl = "";
 var reportEditing = false, activeHistoryId = "", HISTORY_KEY = "vi_recent_tasks_v1", HISTORY_LIMIT = 10;
+var creativeWorkspace = {deconstruction:null, assets:[], script:null, storyboard:[], prompts:[]};
 var accessCode = localStorage.getItem("vi_code") || "";
+function resetCreativeWorkspace(){
+  creativeWorkspace={deconstruction:null,assets:[],script:null,storyboard:[],prompts:[]};
+  ["deconstructShots","assetGrid","scriptOutput","storyboardOutput","promptOutput"].forEach(function(id){if($(id))$(id).innerHTML="";});
+  ["scriptPanel","storyboardPanel","promptPanel"].forEach(function(id){if($(id))$(id).style.display="none";});
+  if($("deconstructStatus"))$("deconstructStatus").textContent="";
+  document.querySelectorAll(".work-step").forEach(function(node,i){node.classList.toggle("ready",i===0);});
+}
 
 /* 带访问码的统一请求封装 */
 function api(path, opts){
@@ -729,6 +790,7 @@ $("btnFallbackUpload").onclick = function(){
 $("btnGo").onclick = async function(){
   hideErr();
   hideLinkFallback();
+  resetCreativeWorkspace();
   activeHistoryId = "";
   var fd = new FormData();
   var isUpload = currentTab === "upload";
@@ -779,6 +841,7 @@ $("btnGo").onclick = async function(){
 /* 演示模式 */
 $("btnDemo").onclick = function(){
   hideErr();
+  resetCreativeWorkspace();
   $("btnDemo").disabled = true;
   startProgress();
   api("/api/analyze-demo")
@@ -839,6 +902,7 @@ function render(a){
   $("script").textContent = r.script || "";
   $("quotes").innerHTML = (r.quotes || []).map(function(q){ return '<li data-editable="1">' + esc(q) + "</li>"; }).join("");
   $("remixCard").style.display = scenario === "creative" ? "block" : "none";
+  $("creativeWorkbench").style.display = scenario === "creative" ? "block" : "none";
 
   $("overallSummary").textContent = a.overall_summary || "";
   renderAgent(a);
@@ -890,6 +954,118 @@ function runScenarioAgent(goal, automatic){
     .finally(function(){ btn.disabled = false; btn.textContent = "重新生成"; });
 }
 $("btnAgent").onclick = function(){ runScenarioAgent((lastResult && lastResult._meta || {}).scenario || selectedScenario(), false); };
+
+function secondsLabel(value){
+  value = Math.max(0, Number(value) || 0);
+  var m = Math.floor(value / 60), s = (value % 60).toFixed(value < 60 ? 1 : 0);
+  return String(m).padStart(2,"0") + ":" + String(s).padStart(4,"0");
+}
+function setWorkbenchStep(count){
+  document.querySelectorAll(".work-step").forEach(function(node, i){ node.classList.toggle("ready", i < count); });
+}
+function renderDeconstruction(data){
+  var shots = data && data.shots || [];
+  $("deconstructShots").innerHTML = shots.map(function(shot){
+    return '<div class="shot-item"><img src="'+esc(shot.image||"")+'" alt="镜头 '+esc(shot.shot)+'">' +
+      '<div class="shot-body"><div class="shot-time">镜头 '+esc(shot.shot)+' · '+secondsLabel(shot.start)+'–'+secondsLabel(shot.end)+'</div>'+
+      '<div class="shot-dialogue">'+esc(shot.dialogue || "（此镜头未识别到台词）")+'</div></div></div>';
+  }).join("");
+  $("deconstructStatus").textContent = shots.length + " 个镜头 · " + ((data.transcript||[]).length) + " 条带时间台词" + (data.warning ? " · "+data.warning : "");
+  setWorkbenchStep(2);
+}
+$("btnDeconstruct").onclick = function(){
+  if(!currentFile){ toast("请先在上方选择本地原视频"); return; }
+  if(selectedScenario() !== "creative"){ toast("请先选择“内容整理与二次创作”场景"); return; }
+  var btn = this, fd = new FormData(); fd.append("file", currentFile, currentFile.name);
+  btn.disabled = true; btn.textContent = "正在拆解…"; $("deconstructStatus").textContent = "上传并调用 FFmpeg 识别镜头，随后转写台词，请勿刷新…";
+  api("/api/creative/deconstruct", {method:"POST", body:fd})
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
+    .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast("原片拆解完成"); })
+    .catch(function(e){ $("deconstructStatus").textContent = friendlyError(e.message); toast($("deconstructStatus").textContent); })
+    .finally(function(){ btn.disabled=false; btn.textContent="重新拆解原片"; });
+};
+
+function compressAsset(file){
+  return new Promise(function(resolve, reject){
+    var reader = new FileReader();
+    reader.onerror = function(){ reject(new Error("图片读取失败")); };
+    reader.onload = function(){
+      var img = new Image();
+      img.onerror = function(){ reject(new Error("图片格式不支持")); };
+      img.onload = function(){
+        var scale = Math.min(1, 768 / Math.max(img.width, img.height));
+        var canvas=document.createElement("canvas"); canvas.width=Math.max(1,Math.round(img.width*scale)); canvas.height=Math.max(1,Math.round(img.height*scale));
+        canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+        resolve(canvas.toDataURL("image/jpeg",.78));
+      }; img.src=reader.result;
+    }; reader.readAsDataURL(file);
+  });
+}
+async function addAssets(files, type){
+  for(var i=0;i<files.length && creativeWorkspace.assets.length<12;i++){
+    try{
+      var image=await compressAsset(files[i]);
+      creativeWorkspace.assets.push({id:"asset-"+Date.now()+"-"+i,type:type,name:(type==="person"?"人物 ":"产品 ")+(creativeWorkspace.assets.filter(function(x){return x.type===type;}).length+1),image:image,hidden:false});
+    }catch(e){ toast(e.message); }
+  }
+  renderAssets(); setWorkbenchStep(creativeWorkspace.assets.length ? 2 : 1);
+}
+function renderAssets(){
+  $("assetGrid").innerHTML=creativeWorkspace.assets.map(function(a,i){
+    return '<div class="asset-card '+(a.hidden?'hidden':'')+'"><img src="'+a.image+'" alt="'+esc(a.name)+'"><input data-asset-name="'+i+'" value="'+esc(a.name)+'">'+
+      '<div class="asset-actions"><button data-hide-asset="'+i+'">'+(a.hidden?'启用':'隐藏')+'</button><button data-delete-asset="'+i+'">删除</button></div></div>';
+  }).join("");
+  document.querySelectorAll("[data-asset-name]").forEach(function(node){ node.onchange=function(){ creativeWorkspace.assets[Number(node.dataset.assetName)].name=node.value.trim()||"未命名素材"; }; });
+  document.querySelectorAll("[data-hide-asset]").forEach(function(node){ node.onclick=function(){ var a=creativeWorkspace.assets[Number(node.dataset.hideAsset)]; a.hidden=!a.hidden; renderAssets(); }; });
+  document.querySelectorAll("[data-delete-asset]").forEach(function(node){ node.onclick=function(){ creativeWorkspace.assets.splice(Number(node.dataset.deleteAsset),1); renderAssets(); }; });
+}
+$("personAssets").onchange=function(){ addAssets(this.files,"person"); this.value=""; };
+$("productAssets").onchange=function(){ addAssets(this.files,"product"); this.value=""; };
+$("btnVoiceRequirement").onclick=function(){
+  var Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!Recognition){ toast("当前浏览器不支持语音输入，请直接键入要求"); return; }
+  var btn=this, rec=new Recognition(); rec.lang="zh-CN"; rec.interimResults=false;
+  rec.onstart=function(){ btn.textContent="正在听…"; btn.disabled=true; };
+  rec.onresult=function(e){ var text=e.results[0][0].transcript; $("creativeRequirements").value += ($("creativeRequirements").value?" ":"")+text; };
+  rec.onerror=function(){ toast("没有识别到语音，请重试"); };
+  rec.onend=function(){ btn.textContent="语音输入要求"; btn.disabled=false; }; rec.start();
+};
+function workbenchPayload(phase){
+  return {phase:phase, analysis:lastResult||{}, deconstruction:creativeWorkspace.deconstruction||{}, assets:creativeWorkspace.assets,
+    requirements:$("creativeRequirements").value.trim(), script:creativeWorkspace.script||{}, storyboard:creativeWorkspace.storyboard||[], target_duration:Number($("targetDuration").value)};
+}
+function callWorkbench(phase, button){
+  button.disabled=true; var old=button.textContent; button.textContent="AI 生成中…";
+  return api("/api/creative/workbench",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(workbenchPayload(phase))})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"生成失败");return j;});})
+    .finally(function(){button.disabled=false;button.textContent=old;});
+}
+function renderNewScript(data){
+  var script=data.script||{}, rows=script.shots||[];
+  var profiles=(data.role_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"人物")+'：</b>'+esc(x.appearance||"")+'；'+esc(x.wardrobe||"")+'</p>';}).join("")+
+    (data.product_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"产品")+'：</b>'+esc(x.features||"")+'</p>';}).join("");
+  var table='<h4>'+esc(script.title||"新短剧脚本")+'</h4><p>'+esc(script.creative_angle||"")+'</p>'+profiles+'<table><thead><tr><th>镜头</th><th>时间</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
+    rows.map(function(x,i){return '<tr><td>'+esc(x.shot||i+1)+'</td><td>'+esc(x.start)+'–'+esc(x.end)+'s</td><td contenteditable="true" data-script-field="shot_type" data-script-i="'+i+'">'+esc(x.shot_type||"")+'</td><td contenteditable="true" data-script-field="visual" data-script-i="'+i+'">'+esc(x.visual||"")+'</td><td contenteditable="true" data-script-field="dialogue" data-script-i="'+i+'">'+esc(x.dialogue||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td></tr>';}).join("")+'</tbody></table>';
+  $("scriptOutput").innerHTML=table; $("scriptPanel").style.display="block"; setWorkbenchStep(3); $("scriptPanel").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function syncWorkbenchScript(){
+  document.querySelectorAll("[data-script-field]").forEach(function(node){var rows=((creativeWorkspace.script||{}).script||{}).shots||[];if(rows[Number(node.dataset.scriptI)])rows[Number(node.dataset.scriptI)][node.dataset.scriptField]=node.textContent.trim();});
+}
+$("btnNewScript").onclick=function(){
+  if(!creativeWorkspace.deconstruction){toast("请先完成原片拆解");return;}
+  if(!creativeWorkspace.assets.some(function(x){return !x.hidden;})){toast("请至少添加一张人物或产品素材");return;}
+  var btn=this; callWorkbench("script",btn).then(function(j){creativeWorkspace.script=j;renderNewScript(j);toast("新脚本已生成，可直接修改");}).catch(function(e){toast(friendlyError(e.message));});
+};
+function renderStoryboard(rows){
+  $("storyboardOutput").innerHTML='<table><thead><tr><th>镜头</th><th>时间</th><th>素材</th><th>具体改造方案</th><th>分镜生图提示词</th></tr></thead><tbody>'+rows.map(function(x){return '<tr><td>'+esc(x.shot)+'</td><td>'+esc(x.time||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td><td>'+esc(x.edit_plan||"")+'</td><td>'+esc(x.image_prompt||"")+'</td></tr>';}).join("")+'</tbody></table>';
+  $("storyboardPanel").style.display="block";setWorkbenchStep(4);$("storyboardPanel").scrollIntoView({behavior:"smooth",block:"start"});
+}
+$("btnStoryboard").onclick=function(){syncWorkbenchScript();var btn=this;callWorkbench("storyboard",btn).then(function(j){creativeWorkspace.storyboard=j.storyboard||[];renderStoryboard(creativeWorkspace.storyboard);toast("分镜改造方案已生成");}).catch(function(e){toast(friendlyError(e.message));});};
+function renderVideoPrompts(rows){
+  $("promptOutput").innerHTML=(rows||[]).map(function(x){return '<div class="agent-box" style="margin-bottom:8px"><h3>第 '+esc(x.group)+' 组 · 镜头 '+esc(x.start_shot)+'–'+esc(x.end_shot)+' · '+esc(x.duration)+' 秒</h3><p class="agent-text">'+esc(x.prompt||"")+'</p></div>';}).join("");
+  $("promptPanel").style.display="block";setWorkbenchStep(5);$("promptPanel").scrollIntoView({behavior:"smooth",block:"start"});
+}
+$("btnVideoPrompts").onclick=function(){var btn=this;callWorkbench("prompts",btn).then(function(j){creativeWorkspace.prompts=j.video_prompts||[];renderVideoPrompts(creativeWorkspace.prompts);toast("视频提示词包已生成");}).catch(function(e){toast(friendlyError(e.message));});};
 
 function syncReportFromDom(){
   if(!lastResult) return;

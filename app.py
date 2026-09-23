@@ -428,10 +428,10 @@ def _compact_transcript(text: str, limit: int = 40000) -> str:
     return "\n……\n".join(text[start:start + width] for start in starts)
 
 
-def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> str:
-    """调用百炼长音频异步转写；失败由上层安全降级为仅画面分析。"""
+def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 300) -> dict:
+    """调用百炼文件转写，保留句级时间戳供视频拆解使用。"""
     if not media_url or not cfg.get("api_key") or not ASR_MODEL:
-        return ""
+        return {"text": "", "segments": []}
     headers = {
         "Authorization": "Bearer " + cfg["api_key"],
         "Content-Type": "application/json",
@@ -446,7 +446,8 @@ def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> st
         json={
             "model": ASR_MODEL,
             "input": asr_input,
-            "parameters": {"channel_id": [0], "enable_itn": True},
+            "parameters": {"channel_id": [0], "enable_itn": True,
+                           "enable_words": False},
         },
         timeout=30,
     )
@@ -492,7 +493,96 @@ def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> st
         raise RuntimeError("语音转写服务未返回有效结果地址")
     transcript_response = requests.get(result_url, timeout=45)
     transcript_response.raise_for_status()
-    return _compact_transcript(_transcript_text(transcript_response.json()))
+    payload = transcript_response.json()
+    segments: list[dict] = []
+    for transcript in payload.get("transcripts") or []:
+        if not isinstance(transcript, dict):
+            continue
+        for sentence in transcript.get("sentences") or []:
+            if not isinstance(sentence, dict):
+                continue
+            text = str(sentence.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                begin = max(0, int(sentence.get("begin_time") or 0))
+                end = max(begin, int(sentence.get("end_time") or begin))
+            except (TypeError, ValueError):
+                continue
+            segments.append({"start_ms": begin, "end_ms": end, "text": text})
+    return {
+        "text": _compact_transcript(_transcript_text(payload)),
+        "segments": segments[:2000],
+    }
+
+
+def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> str:
+    """兼容原有分析流程，仅返回转写正文。"""
+    return transcribe_remote_audio_details(media_url, cfg, timeout).get("text", "")
+
+
+def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> list[dict]:
+    """用 FFmpeg 场景分数寻找镜头切换点并输出低分辨率关键帧。"""
+    pattern = os.path.join(out_dir, "scene-%03d.jpg")
+    command = [
+        FFMPEG, "-hide_banner", "-i", video_path,
+        "-vf", "select='gt(scene,0.28)',scale=480:-2,showinfo",
+        "-fps_mode", "vfr", "-frames:v", "39", "-q:v", "4", pattern,
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=240)
+    times = [float(value) for value in re.findall(r"pts_time:([0-9.]+)", completed.stderr)]
+
+    # 场景检测可能遇到静态视频；首帧始终保留，保证工作台仍可继续。
+    first_path = os.path.join(out_dir, "scene-000.jpg")
+    subprocess.run([
+        FFMPEG, "-hide_banner", "-loglevel", "error", "-ss", "0",
+        "-i", video_path, "-frames:v", "1", "-vf", "scale=480:-2",
+        "-q:v", "4", "-y", first_path,
+    ], capture_output=True, timeout=60)
+    files = sorted(glob.glob(os.path.join(out_dir, "scene-*.jpg")))
+    items: list[dict] = []
+    for index, path in enumerate(files[:40]):
+        time_value = 0.0 if Path(path).name == "scene-000.jpg" else (
+            times[min(max(index - 1, 0), len(times) - 1)] if times else 0.0)
+        raw = Path(path).read_bytes()
+        items.append({
+            "shot": index + 1,
+            "start": round(time_value, 2),
+            "end": round(duration, 2),
+            "image": "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii"),
+        })
+    items.sort(key=lambda item: item["start"])
+    # FFmpeg 的首帧和第一个切点偶尔同为 0 秒，去重。
+    deduped: list[dict] = []
+    for item in items:
+        if deduped and abs(item["start"] - deduped[-1]["start"]) < 0.2:
+            continue
+        deduped.append(item)
+    for index, item in enumerate(deduped):
+        item["shot"] = index + 1
+        item["end"] = round(deduped[index + 1]["start"] if index + 1 < len(deduped) else duration, 2)
+    return deduped
+
+
+def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict) -> dict:
+    """让视觉模型理解人物/产品参考图，并输出受约束 JSON。"""
+    content = [{"type": "text", "text": prompt}]
+    for image in images[:12]:
+        if isinstance(image, str) and image.startswith("data:image/") and len(image) <= 1_500_000:
+            content.append({"type": "image_url", "image_url": {"url": image}})
+    response = requests.post(
+        API_URL,
+        headers={"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json"},
+        json={"model": cfg.get("model") or DEFAULT_MODEL,
+              "messages": [{"role": "user", "content": content}],
+              "temperature": 0.3},
+        timeout=240,
+    )
+    if response.status_code != 200:
+        raise HTTPException(502, f"视觉模型返回异常（HTTP {response.status_code}）")
+    message = response.json()["choices"][0]["message"]
+    text = (message.get("content") or message.get("reasoning_content") or "").strip()
+    return parse_model_json(re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip())
 
 
 ANALYSIS_MODES = {
@@ -795,6 +885,139 @@ async def agent_enrich(
                                       "trace": trace, "quality": quality}}
     finally:
         agent_slot.release()
+
+
+@app.get("/api/asr-media/{token}")
+def asr_media(token: str):
+    """供百炼在短时间内拉取拆解音轨；随机令牌过期后立即失效。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        raise HTTPException(404, "Not found")
+    with _asr_media_lock:
+        entry = _asr_media.get(token)
+    if not entry or entry[1] < time.time() or not os.path.isfile(entry[0]):
+        raise HTTPException(404, "Not found")
+    return FileResponse(entry[0], media_type="audio/mpeg", filename="track.mp3")
+
+
+@app.post("/api/creative/deconstruct")
+async def creative_deconstruct(
+    request: Request,
+    file: UploadFile = File(...),
+    _code: None = Depends(require_code),
+):
+    """电商二创第一步：FFmpeg 临时拆镜头，百炼返回带时间轴台词。"""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置 API Key")
+    suffix = Path(file.filename or "video.mp4").suffix.lower()
+    if suffix not in {".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi"}:
+        raise HTTPException(400, "请上传 MP4、MOV、WebM、MKV 或 AVI 视频")
+    tmpdir = tempfile.mkdtemp(prefix="vinsight_creative_")
+    video_path = os.path.join(tmpdir, "source" + suffix)
+    audio_path = os.path.join(tmpdir, "track.mp3")
+    token = uuid.uuid4().hex
+    try:
+        total = 0
+        with open(video_path, "wb") as output:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > min(MAX_VIDEO_BYTES, 300 * 1024 * 1024):
+                    raise HTTPException(413, "深度拆解视频暂限 300MB 以内")
+                output.write(chunk)
+        duration = await asyncio.to_thread(get_duration, video_path)
+        if not duration or duration <= 0:
+            raise HTTPException(400, "无法读取视频，请转换为 MP4（H.264/AAC）后重试")
+        if duration > 30 * 60:
+            raise HTTPException(400, "电商二创深度拆解暂支持 30 分钟以内视频")
+        scenes = await asyncio.to_thread(_creative_scene_frames, video_path, tmpdir, duration)
+        audio_run = await asyncio.to_thread(
+            subprocess.run,
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video_path,
+             "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", "-y", audio_path],
+            capture_output=True, timeout=240,
+        )
+        transcript = {"text": "", "segments": []}
+        asr_warning = ""
+        if audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
+            with _asr_media_lock:
+                _asr_media[token] = (audio_path, time.time() + 600)
+            media_url = str(request.url_for("asr_media", token=token))
+            forwarded_proto = request.headers.get("x-forwarded-proto", "")
+            if forwarded_proto == "https" and media_url.startswith("http://"):
+                media_url = "https://" + media_url[7:]
+            try:
+                transcript = await asyncio.to_thread(transcribe_remote_audio_details, media_url, cfg)
+            except Exception as exc:
+                logger.warning("creative_asr_fallback reason=%s", exc)
+                asr_warning = "台词识别暂时失败，镜头拆解已保留，可稍后重试。"
+        else:
+            asr_warning = "视频没有可识别音轨，已完成镜头拆解。"
+
+        segments = transcript.get("segments") or []
+        for scene in scenes:
+            scene["dialogue"] = " ".join(
+                seg["text"] for seg in segments
+                if seg.get("end_ms", 0) / 1000 > scene["start"] and
+                seg.get("start_ms", 0) / 1000 < scene["end"]
+            ).strip()
+        return {
+            "duration": round(duration, 2), "shots": scenes,
+            "transcript": segments, "transcript_text": transcript.get("text", ""),
+            "warning": asr_warning,
+            "processing": "FFmpeg 临时拆解镜头与音轨；音轨由百炼识别；临时文件完成后删除。",
+        }
+    finally:
+        with _asr_media_lock:
+            _asr_media.pop(token, None)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.post("/api/creative/workbench")
+async def creative_workbench(
+    payload: dict = Body(...),
+    _code: None = Depends(require_code),
+):
+    """根据当前阶段受控生成新脚本、分镜改造方案或视频提示词。"""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置 API Key")
+    if len(json.dumps(payload, ensure_ascii=False)) > 18_000_000:
+        raise HTTPException(413, "素材数据过大，请减少图片数量或压缩图片")
+    phase = str(payload.get("phase") or "")
+    if phase not in {"script", "storyboard", "prompts"}:
+        raise HTTPException(400, "不支持的生成阶段")
+    context = {
+        "analysis": _analysis_for_agent(payload.get("analysis") or {}),
+        "shots": [{k: item.get(k) for k in ("shot", "start", "end", "dialogue")}
+                  for item in ((payload.get("deconstruction") or {}).get("shots") or [])[:40]
+                  if isinstance(item, dict)],
+        "transcript": (payload.get("deconstruction") or {}).get("transcript", [])[:500],
+        "assets": [{k: item.get(k) for k in ("id", "name", "type", "hidden")}
+                   for item in (payload.get("assets") or [])[:12] if isinstance(item, dict)],
+        "requirements": str(payload.get("requirements") or "")[:4000],
+        "script": payload.get("script") or {},
+        "storyboard": payload.get("storyboard") or [],
+        "target_duration": int(payload.get("target_duration") or 15),
+    }
+    images = [item.get("image", "") for item in (payload.get("assets") or [])
+              if isinstance(item, dict) and not item.get("hidden")]
+    # 原片关键帧让模型真正看见镜头内容；均匀限量，避免一次请求过大。
+    original_images = [item.get("image", "") for item in
+                       ((payload.get("deconstruction") or {}).get("shots") or [])[::4]
+                       if isinstance(item, dict)]
+    images = (original_images[:8] + images)[:12]
+    if phase == "script":
+        instruction = """你是电商短剧编导。识别参考图里人物的可见外形、发型、服装和产品特征；不要猜测身份、种族、健康等敏感属性。参考原片拆解，保留原片时间结构、镜头功能和节奏，但必须生成新的台词与合法原创表达，不得照抄。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"appearance\":\"\",\"wardrobe\":\"\"}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"shots\":[{\"shot\":1,\"start\":0,\"end\":2.5,\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]}}。"""
+    elif phase == "storyboard":
+        instruction = """你是分镜改造导演。基于已确认的新脚本，为每个镜头输出具体、可执行的改图方案和生图提示词，明确引用哪些人物/产品素材；隐藏素材不得引用。不要声称已经生成图片。输出 JSON：{\"storyboard\":[{\"shot\":1,\"time\":\"0-2.5s\",\"asset_ids\":[\"\"],\"edit_plan\":\"\",\"image_prompt\":\"\",\"negative_prompt\":\"\"}]}。"""
+    else:
+        instruction = """你是视频生成提示词编排器。按目标时长把连续分镜组成若干段，每段总时长不得明显超过目标时长，并保留镜头顺序。输出 JSON：{\"video_prompts\":[{\"group\":1,\"start_shot\":1,\"end_shot\":3,\"duration\":15,\"prompt\":\"包含主体、动作、运镜、场景、节奏、转场、声音的可执行提示词\"}]}。"""
+    prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
+    result = await asyncio.to_thread(_creative_asset_prompt, prompt, images, cfg)
+    return result
 
 
 def _validated_export_report(payload: dict) -> dict:
