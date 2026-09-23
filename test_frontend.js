@@ -62,8 +62,11 @@ assert(context.reportHtml(sample).includes("语音内容摘要"),
 
 for (const id of ["historyCard", "btnClearHistory", "videoPlayer", "btnEdit", "btnWord", "btnPdf",
   "creativeFailure", "btnCreativeRetry", "btnCreativeFallback", "subtitleFile",
-  "understandingOutput", "targetTotalDuration", "referenceScript"]) {
+  "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript"]) {
   assert(html.includes('id="' + id + '"'), "Missing UI control: " + id);
+}
+for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {
+  assert(!html.includes('id="' + id + '"'), "Removed variation toggle is still visible: " + id);
 }
 assert(html.includes("视频配文案"), "Creative workflow should expose generic video post copy");
 assert(!html.includes("小红书文案"), "Creative copy must not be tied to a specific platform");
