@@ -44,10 +44,11 @@
   .scenario-title{font-size:13px;font-weight:700;margin:12px 0 8px}
   .scenario-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .scenario-option{display:block;cursor:pointer}
-  .scenario-option input{position:absolute;opacity:0;pointer-events:none}
+  .scenario-option input{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;opacity:0}
   .scenario-box{height:100%;border:1px solid var(--line);border-radius:11px;padding:14px;background:#fff;transition:.15s}
   .scenario-box b{display:block;font-size:15px;color:var(--blue-d);margin-bottom:4px}.scenario-box span{display:block;font-size:12px;color:var(--muted);line-height:1.55}
   .scenario-option input:checked + .scenario-box{border:2px solid var(--blue);background:var(--blue-l);padding:13px;box-shadow:0 0 0 3px rgba(24,95,165,.08)}
+  .scenario-option input:focus-visible + .scenario-box{outline:3px solid rgba(24,95,165,.24);outline-offset:2px}
   .workflow-hint{margin-top:10px;padding:9px 11px;border-radius:8px;background:#f6f8fa;color:var(--muted);font-size:12px}
   .mode-note{font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 10px}
   input:focus{outline:none;border-color:var(--blue)}
@@ -155,8 +156,8 @@
 
 <main>
   <section class="hero">
-    <h1>一个视频，整理成真正可用的内容</h1>
-    <p>选择你的目标：复盘课程与讲座，或把视频转化为脚本、分镜和社交平台文案。系统会按场景自动完成分析与整理。</p>
+    <h1>VideoInsight 智能视频内容分析平台</h1>
+    <p>面向课程与讲座复盘、内容整理与二次创作两类应用场景，提供视频解析、关键信息提取、结构化整理及多格式成果导出。</p>
   </section>
   <div class="banner" id="noKeyBanner">还没有配置 API Key：可以先点右上角「演示模式」看完整效果；要分析自己的视频，请在「设置」里填入阿里百炼 API Key。</div>
 
@@ -195,7 +196,7 @@
       </div>
       <div class="mode-note" id="modeNote">标准模式：本地视频抽取最多 18 张关键帧，兼顾质量、速度与成本，预计约 1～3 分钟。</div>
       <div>
-        <div class="scenario-title">这次想得到什么？</div>
+        <div class="scenario-title">选择一个你的视频场景</div>
         <div class="scenario-grid">
           <label class="scenario-option">
             <input type="radio" name="scenario" value="course" checked>
