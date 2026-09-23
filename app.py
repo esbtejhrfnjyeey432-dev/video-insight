@@ -657,19 +657,34 @@ def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict) -> dict:
     for image in images[:12]:
         if isinstance(image, str) and image.startswith("data:image/") and len(image) <= 1_500_000:
             content.append({"type": "image_url", "image_url": {"url": image}})
-    response = requests.post(
-        API_URL,
-        headers={"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json"},
-        json={"model": cfg.get("model") or DEFAULT_MODEL,
-              "messages": [{"role": "user", "content": content}],
-              "temperature": 0.3},
-        timeout=240,
-    )
-    if response.status_code != 200:
-        raise HTTPException(502, f"视觉模型返回异常（HTTP {response.status_code}）")
-    message = response.json()["choices"][0]["message"]
-    text = (message.get("content") or message.get("reasoning_content") or "").strip()
-    return parse_model_json(re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip())
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                API_URL,
+                headers={"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json"},
+                json={"model": cfg.get("model") or DEFAULT_MODEL,
+                      "messages": [{"role": "user", "content": content}],
+                      "temperature": 0.2,
+                      "max_tokens": 8192,
+                      "enable_thinking": False,
+                      "response_format": {"type": "json_object"}},
+                timeout=240,
+            )
+            if response.status_code != 200:
+                raise HTTPException(502, f"视觉模型返回异常（HTTP {response.status_code}）")
+            message = response.json()["choices"][0]["message"]
+            text = (message.get("content") or message.get("reasoning_content") or "").strip()
+            return parse_model_json(re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip())
+        except Exception as exc:
+            last_error = exc
+            logger.warning("creative_json_retry attempt=%s reason=%s", attempt + 1,
+                           type(exc).__name__)
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+    if isinstance(last_error, HTTPException):
+        raise last_error
+    raise HTTPException(502, "内容整理暂未完成")
 
 
 ANALYSIS_MODES = {
@@ -1092,7 +1107,7 @@ async def creative_workbench(
         "shots": [{k: item.get(k) for k in ("shot", "start", "end", "dialogue")}
                   for item in ((payload.get("deconstruction") or {}).get("shots") or [])[:40]
                   if isinstance(item, dict)],
-        "transcript": (payload.get("deconstruction") or {}).get("transcript", [])[:500],
+        "transcript": (payload.get("deconstruction") or {}).get("transcript", [])[:120],
         "assets": [{k: item.get(k) for k in ("id", "name", "type", "hidden")}
                    for item in (payload.get("assets") or [])[:12] if isinstance(item, dict)],
         "requirements": str(payload.get("requirements") or "")[:4000],
@@ -1104,17 +1119,27 @@ async def creative_workbench(
         "reference_script": str(payload.get("reference_script") or "")[:12000],
         "understanding": (payload.get("deconstruction") or {}).get("understanding") or {},
     }
-    images = [item.get("image", "") for item in (payload.get("assets") or [])
-              if isinstance(item, dict) and not item.get("hidden")]
+    asset_images = [item.get("image", "") for item in (payload.get("assets") or [])
+                    if isinstance(item, dict) and not item.get("hidden")]
     # 原片关键帧让模型真正看见镜头内容；均匀限量，避免一次请求过大。
     original_images = [item.get("image", "") for item in
                        ((payload.get("deconstruction") or {}).get("shots") or [])[::4]
                        if isinstance(item, dict)]
-    images = (original_images[:8] + images)[:12]
+    if phase == "script":
+        images = (original_images[:4] + asset_images[:6])[:8]
+        context.pop("storyboard", None)
+    elif phase == "storyboard":
+        images = asset_images[:6]
+        for key in ("analysis", "shots", "transcript", "reference_script", "understanding"):
+            context.pop(key, None)
+    else:
+        images = []
+        for key in ("analysis", "shots", "transcript", "reference_script", "understanding", "requirements"):
+            context.pop(key, None)
     if phase == "script":
         instruction = """你是短剧情裂变编剧。以目标总时长重新规划剧情，不照抄原片；根据用户选择决定是否换产品、场景、人物或冲突模式，并可参考成熟脚本的结构但不得复制原文。说话人必须继承已校准人物；待确认台词不得擅自归属。完整脚本要写清剧情单元承接、出场人物、人物关系、服装、道具、情绪动作、产品植入方式。另生成一份与新视频匹配的通用发布配文，不指定小红书、抖音等平台。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"identity\":\"\",\"personality\":\"\",\"appearance\":\"\",\"wardrobe_by_unit\":[{\"unit\":\"\",\"wardrobe\":\"\"}]}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\",\"placement_strategy\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"target_seconds\":120,\"story_units\":[{\"unit\":1,\"purpose\":\"\",\"transition\":\"\",\"characters\":[],\"wardrobe\":\"\",\"props\":[],\"product_placement\":\"\"}],\"shots\":[{\"shot\":1,\"unit\":1,\"start\":0,\"end\":10,\"speaker\":\"\",\"emotion\":\"\",\"action\":\"\",\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]},\"post_copy\":{\"titles\":[\"标题1\",\"标题2\",\"标题3\"],\"body\":\"与新视频内容一致的简洁发布配文\",\"tags\":[\"标签\"]}}。"""
     elif phase == "storyboard":
-        instruction = """你是连续分镜导演。按目标模型单段时长把完整脚本拆成连续分镜组，不按固定帧数；每组对应一段完整剧情，提供九宫格画面规划（1到9格，按实际镜头需要），包含全景/中景/近景/特写变化、前后连续动作、实际出场人物、人物服装、场景和产品素材引用。不要声称已经生成图片。输出 JSON：{\"storyboard\":[{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}],\"grid_prompt\":\"九宫格生图提示词\",\"negative_prompt\":\"\"}]}。"""
+        instruction = """你是连续分镜导演。按目标单段时长把完整脚本拆成连续分镜组；每组只为脚本中实际存在的镜头提供画面规划，总数不超过9格，包含景别变化、前后连续动作、实际出场人物、人物服装、场景和产品素材引用。不要补写重复镜头，不要声称已经生成图片。只输出 JSON：{\"storyboard\":[{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}],\"grid_prompt\":\"九宫格生图提示词\",\"negative_prompt\":\"\"}]}。"""
     else:
         instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]

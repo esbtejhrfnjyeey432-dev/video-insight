@@ -22,6 +22,24 @@ class StabilityTests(unittest.TestCase):
         with self.assertRaises(app.HTTPException):
             app._validate_creative_phase("storyboard", {"storyboard": []})
 
+    def test_creative_json_mode_retries_malformed_output(self):
+        malformed = mock.Mock(status_code=200)
+        malformed.json.return_value = {
+            "choices": [{"message": {"content": "not-json"}}]
+        }
+        success = mock.Mock(status_code=200)
+        success.json.return_value = {
+            "choices": [{"message": {"content": '{"storyboard":[{"panels":[{}],"time":"0-5s"}]}'}}]
+        }
+        with mock.patch("app.requests.post", side_effect=[malformed, success]) as post, \
+             mock.patch("app.time.sleep"):
+            result = app._creative_asset_prompt("请输出 JSON", [], {"api_key": "test", "model": "qwen3-vl-plus"})
+        self.assertEqual(len(result["storyboard"]), 1)
+        self.assertEqual(post.call_count, 2)
+        sent = post.call_args_list[0].kwargs["json"]
+        self.assertEqual(sent["response_format"], {"type": "json_object"})
+        self.assertFalse(sent["enable_thinking"])
+
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
 
