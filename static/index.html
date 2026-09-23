@@ -238,7 +238,15 @@
     <div class="card agent-card">
       <div class="sec-title" style="justify-content:space-between;flex-wrap:wrap">
         <span>Agent 深度创作 <span class="tag">动态规划 · 受控工具调用</span></span>
-        <button class="primary" id="btnAgent">自动选择创作路线</button>
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="agentGoal" aria-label="Agent 创作路线" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit">
+            <option value="auto">自动选择</option>
+            <option value="creative">二次创作</option>
+            <option value="course">课程整理</option>
+            <option value="all">二创 + 课程</option>
+          </select>
+          <button class="primary" id="btnAgent">开始 Agent 创作</button>
+        </span>
       </div>
       <div class="note">千问会根据视频类型和当前报告，在二创包与课程包中选择真正有价值的工具；最多执行两步，避免无限调用和费用失控。</div>
       <div id="agentStatus" class="agent-trace">尚未运行</div>
@@ -836,11 +844,12 @@ $("btnAgent").onclick = function(){
   syncReportFromDom();
   var btn = this; btn.disabled = true; btn.textContent = "Agent 正在规划与执行…";
   $("agentStatus").textContent = "正在识别内容类型、选择工具并生成素材，请稍候…";
-  api("/api/agent/enrich", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({analysis:lastResult, goals:["auto"]})})
+  var goal = $("agentGoal").value || "auto";
+  api("/api/agent/enrich", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({analysis:lastResult, goals:[goal]})})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail || "Agent 执行失败"); return j; }); })
     .then(function(j){ Object.keys(j).forEach(function(k){ lastResult[k] = j[k]; }); renderAgent(lastResult); updateActiveHistory(); toast("Agent 创作包已生成"); })
     .catch(function(err){ $("agentStatus").textContent = err.message || "Agent 执行失败，请稍后重试"; toast($("agentStatus").textContent); })
-    .finally(function(){ btn.disabled = false; btn.textContent = "重新规划创作路线"; });
+    .finally(function(){ btn.disabled = false; btn.textContent = "重新运行 Agent"; });
 };
 
 function syncReportFromDom(){

@@ -651,6 +651,19 @@ def _normalize_agent_plan(plan: dict, analysis: dict, requested: list[str]) -> d
 
     requested_set = {str(x).lower() for x in requested}
     teaching = bool((analysis.get("teaching") or {}).get("is_teaching"))
+    if "all" in requested_set:
+        requested_set.update({"creative", "course"})
+    required_tools = []
+    if "creative" in requested_set:
+        required_tools.append(("creative_pack", "用户明确选择了二次创作路线"))
+    if "course" in requested_set:
+        required_tools.append(("course_pack", "用户明确选择了课程整理路线"))
+    if required_tools:
+        # 显式目标优先于模型自由规划，避免用户点了课程整理却只得到二创素材。
+        steps = [
+            {"tool": tool, "reason": reason}
+            for tool, reason in required_tools
+        ][:2]
     if not steps:
         if "creative" in requested_set or "auto" in requested_set or not requested_set:
             steps.append({"tool": "creative_pack", "reason": "生成多平台二创素材"})
@@ -669,7 +682,7 @@ def _agent_plan(analysis: dict, requested: list[str], cfg: dict) -> dict:
 只能选择以下工具，最多两步，不得发明工具：
 - creative_pack：生成多时长脚本、精彩片段建议、分镜、小红书文案和短视频口播稿。
 - course_pack：生成课程大纲、学习目标、课件页和逐页讲师备注；只适合课程、讲座、知识教学内容。
-用户目标：{json.dumps(requested or ['auto'], ensure_ascii=False)}
+用户目标：{json.dumps(requested or ['auto'], ensure_ascii=False)}。如果用户明确指定 creative、course 或 all，必须选择对应工具；只有 auto 才可自由取舍。
 已有分析：{snapshot}
 只输出 JSON：{{"intent":"用户意图","route":"选择的创作路线","steps":[{{"tool":"creative_pack","reason":"选择理由"}}]}}
 不要因为工具存在就全部选择；只选择与内容真正匹配的工具。"""

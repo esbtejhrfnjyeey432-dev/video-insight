@@ -161,6 +161,20 @@ class StabilityTests(unittest.TestCase):
             "tool": "creative_pack", "reason": "生成多平台二创素材",
         }])
 
+    def test_agent_plan_respects_explicit_course_goal(self):
+        analysis = {"teaching": {"is_teaching": True}}
+        plan = app._normalize_agent_plan({
+            "steps": [{"tool": "creative_pack", "reason": "模型偏好二创"}],
+        }, analysis, ["course"])
+        self.assertEqual(plan["steps"], [{
+            "tool": "course_pack", "reason": "用户明确选择了课程整理路线",
+        }])
+
+    def test_agent_plan_all_goal_runs_both_bounded_tools(self):
+        plan = app._normalize_agent_plan({}, {"teaching": {"is_teaching": True}}, ["all"])
+        self.assertEqual([x["tool"] for x in plan["steps"]],
+                         ["creative_pack", "course_pack"])
+
     def test_agent_quality_requires_complete_outputs(self):
         plan = {"steps": [{"tool": "creative_pack"}, {"tool": "course_pack"}]}
         incomplete = app._agent_quality({"creative": {"scripts": {"60s": "x"}}}, plan)
