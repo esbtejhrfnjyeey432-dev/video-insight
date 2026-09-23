@@ -144,7 +144,7 @@
   .use-case p{font-size:12.5px;color:var(--muted);line-height:1.65}
   .use-case-note{font-size:12px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
   .workbench{border-color:#b9d5ef;background:linear-gradient(180deg,#fff,#f7fbff)}
-  .work-steps{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:12px 0 18px}
+  .work-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:12px 0 18px}
   .work-step{padding:9px 6px;border:1px solid var(--line);border-radius:8px;text-align:center;font-size:12px;background:#fff;color:var(--muted)}
   .work-step.ready{border-color:#83b6e3;background:var(--blue-l);color:var(--blue-d);font-weight:700}
   .work-panel{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}
@@ -289,7 +289,6 @@
       <div class="work-steps">
         <div class="work-step ready">01 原片理解</div><div class="work-step">02 创作资产</div>
         <div class="work-step">03 新脚本</div><div class="work-step">04 分镜方案</div><div class="work-step">05 视频提示词</div>
-        <div class="work-step">06 智能成片</div>
       </div>
       <div class="privacy-line">深度拆解需临时上传原视频：FFmpeg 在应用后端提取镜头和音轨，音轨交由百炼识别台词；任务结束后立即删除临时文件。基础解析仍保持仅上传关键帧。</div>
       <div class="creative-failure" id="creativeFailure"><b id="creativeFailureTitle">本步骤未完成</b><p id="creativeFailureReason"></p><p id="creativeFailureAction"></p><div class="work-actions"><button id="btnCreativeRetry">重新尝试</button><button class="primary" id="btnCreativeFallback">使用兜底结果继续</button></div></div>
