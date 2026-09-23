@@ -6,3 +6,5 @@ imageio-ffmpeg==0.6.0
 python-multipart==0.0.32
 yt-dlp==2026.8.19
 curl_cffi==0.16.3
+python-pptx==1.0.2
+reportlab==4.4.4

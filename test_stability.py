@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """不调用外部平台或 AI 的后端稳定性测试。"""
 import asyncio
+import io
 import unittest
 from unittest import mock
 
@@ -185,6 +186,33 @@ class StabilityTests(unittest.TestCase):
             "course": {"outline": [{}], "slides": [{}]},
         }, plan)
         self.assertTrue(complete["passed"])
+
+    def test_scenario_context_rejects_unknown_values(self):
+        self.assertEqual(app._scenario_context("creative")[0], "creative")
+        self.assertEqual(app._scenario_context("unknown")[0], "course")
+
+    def test_native_pptx_and_pdf_exports(self):
+        report = {
+            "title": "高效学习课程",
+            "key_info": ["主动回忆", "间隔重复"],
+            "overall_summary": "课程总结",
+            "course": {
+                "learning_objectives": ["掌握三个方法"],
+                "slides": [{
+                    "title": "主动回忆",
+                    "bullets": ["合上书本自测"],
+                    "speaker_notes": "请让学员现场练习",
+                }],
+            },
+        }
+        pptx = app._build_pptx(report).getvalue()
+        pdf = app._build_pdf(report).getvalue()
+        self.assertTrue(pptx.startswith(b"PK"))
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        from pptx import Presentation
+        deck = Presentation(io.BytesIO(pptx))
+        self.assertEqual(len(deck.slides), 2)
+        self.assertIn("主动回忆", deck.slides[1].shapes.title.text)
 
 
 if __name__ == "__main__":

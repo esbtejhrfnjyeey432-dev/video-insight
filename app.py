@@ -9,6 +9,8 @@ import concurrent.futures
 import glob
 import hashlib
 import hmac
+import html
+import io
 import json
 import logging
 import os
@@ -25,7 +27,7 @@ import requests
 import imageio_ffmpeg
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import resolver
@@ -515,8 +517,20 @@ def _model_retry_delay(response, attempt: int) -> float:
         return min(8.0, 0.75 * (2 ** attempt))
 
 
+SCENARIO_CONTEXT = {
+    "course": "本次用于课程与讲座复盘：优先提炼课程结构、知识脉络、教学观点、学习目标与可复习内容。",
+    "creative": "本次用于内容整理与二次创作：优先识别传播亮点、可剪辑片段、创作角度、脚本与平台化表达。",
+}
+
+
+def _scenario_context(scenario: str) -> tuple[str, str]:
+    safe = scenario if scenario in SCENARIO_CONTEXT else "course"
+    return safe, "\n\n使用场景：" + SCENARIO_CONTEXT[safe]
+
+
 def call_qwen(frames: list, cfg: dict, duration: float | None = None,
-              mode: str = "standard", transcript: str = "") -> dict:
+              mode: str = "standard", transcript: str = "",
+              scenario: str = "course") -> dict:
     duration_note = ""
     if duration and duration > 0:
         duration_note = (
@@ -524,13 +538,14 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
             "按时间顺序均匀抽取。章节时间请根据总时长与帧序估算。"
         )
     mode, context_note = _analysis_context(mode)
+    scenario, scenario_note = _scenario_context(scenario)
     transcript_note = ""
     if transcript:
         transcript_note = (
             "\n\n以下为自动语音转写（可能有识别误差），请与关键帧相互印证：\n"
             + transcript
         )
-    content = [{"type": "text", "text": PROMPT + duration_note + context_note + transcript_note}]
+    content = [{"type": "text", "text": PROMPT + duration_note + context_note + scenario_note + transcript_note}]
     for f in frames:
         content.append({"type": "image_url", "image_url": {"url": f}})
     body = {
@@ -759,7 +774,12 @@ async def agent_enrich(
     agent_slot = await acquire_analysis_slot("agent")
     try:
         check_daily_usage()
-        plan = await asyncio.to_thread(_agent_plan, analysis, requested, cfg)
+        explicit = {str(item).lower() for item in requested} & {"creative", "course", "all"}
+        if explicit:
+            plan = _normalize_agent_plan({}, analysis, requested)
+            plan["route"] = "课程与讲座复盘" if "course" in explicit else "内容整理与二次创作"
+        else:
+            plan = await asyncio.to_thread(_agent_plan, analysis, requested, cfg)
         if not plan["steps"]:
             raise HTTPException(422, "当前内容没有匹配到适合的 Agent 创作工具")
         merged: dict = {}
@@ -775,6 +795,133 @@ async def agent_enrich(
                                       "trace": trace, "quality": quality}}
     finally:
         agent_slot.release()
+
+
+def _validated_export_report(payload: dict) -> dict:
+    report = payload.get("report") if isinstance(payload, dict) else None
+    if not isinstance(report, dict) or not str(report.get("title") or "").strip():
+        raise HTTPException(400, "没有可导出的报告")
+    if len(json.dumps(report, ensure_ascii=False)) > 500_000:
+        raise HTTPException(413, "报告内容过大")
+    return report
+
+
+def _build_pptx(report: dict) -> io.BytesIO:
+    """生成原生 Office Open XML 演示文稿，而不是伪装成 PPT 的 HTML。"""
+    from pptx import Presentation
+    from pptx.util import Pt
+
+    presentation = Presentation()
+    presentation.core_properties.title = str(report.get("title") or "视频课程课件")[:200]
+    title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+    title_slide.shapes.title.text = str(report.get("title") or "视频课程课件")
+    title_slide.placeholders[1].text = "VideoInsight · 课程与讲座复盘"
+
+    course = report.get("course") or {}
+    slides = course.get("slides") or []
+    if not slides:
+        slides = [{
+            "title": "核心内容",
+            "bullets": report.get("key_info") or [report.get("overall_summary") or "暂无内容"],
+            "speaker_notes": "",
+        }]
+    for item in slides[:30]:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = str(item.get("title") or "课程内容")[:180]
+        frame = slide.placeholders[1].text_frame
+        frame.clear()
+        bullets = item.get("bullets") or []
+        for index, bullet in enumerate(bullets[:10]):
+            paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+            paragraph.text = str(bullet)[:500]
+            paragraph.font.size = Pt(24)
+        notes = str(item.get("speaker_notes") or "").strip()
+        if notes:
+            slide.notes_slide.notes_text_frame.text = "讲师备注：" + notes[:4000]
+    output = io.BytesIO()
+    presentation.save(output)
+    output.seek(0)
+    return output
+
+
+def _build_pdf(report: dict) -> io.BytesIO:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+
+    output = io.BytesIO()
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("CNTitle", parent=styles["Title"], fontName="STSong-Light",
+                                 fontSize=22, leading=30, alignment=TA_CENTER, textColor=colors.HexColor("#0C447C"))
+    heading = ParagraphStyle("CNHeading", parent=styles["Heading2"], fontName="STSong-Light",
+                             fontSize=15, leading=22, spaceBefore=12, textColor=colors.HexColor("#185FA5"))
+    body = ParagraphStyle("CNBody", parent=styles["BodyText"], fontName="STSong-Light",
+                          fontSize=10.5, leading=17, spaceAfter=5)
+    doc = SimpleDocTemplate(output, pagesize=A4, rightMargin=18*mm, leftMargin=18*mm,
+                            topMargin=18*mm, bottomMargin=18*mm,
+                            title=str(report.get("title") or "视频分析报告"))
+    story = [Paragraph(html.escape(str(report.get("title") or "视频分析报告")), title_style), Spacer(1, 8)]
+
+    def add_section(name: str, items):
+        if not items:
+            return
+        story.append(Paragraph(html.escape(name), heading))
+        if isinstance(items, str):
+            story.append(Paragraph(html.escape(items).replace("\n", "<br/>"), body))
+        else:
+            for index, item in enumerate(items, 1):
+                story.append(Paragraph(f"{index}. {html.escape(str(item))}", body))
+
+    add_section("关键信息", report.get("key_info"))
+    add_section("语音内容摘要", report.get("speech_summary"))
+    add_section("总体总结", report.get("overall_summary"))
+    course = report.get("course") or {}
+    if course:
+        add_section("学习目标", course.get("learning_objectives"))
+        story.append(PageBreak())
+        story.append(Paragraph("课程课件与讲师备注", heading))
+        for index, item in enumerate((course.get("slides") or [])[:30], 1):
+            story.append(Paragraph(f"{index}. {html.escape(str(item.get('title') or '课程内容'))}", heading))
+            for bullet in (item.get("bullets") or [])[:10]:
+                story.append(Paragraph("• " + html.escape(str(bullet)), body))
+            notes = str(item.get("speaker_notes") or "").strip()
+            if notes:
+                story.append(Paragraph("讲师备注：" + html.escape(notes), body))
+    creative = report.get("creative") or {}
+    if creative:
+        add_section("多时长脚本", [f"{key}: {value}" for key, value in (creative.get("scripts") or {}).items()])
+        add_section("小红书文案", (creative.get("xiaohongshu") or {}).get("body"))
+    doc.build(story)
+    output.seek(0)
+    return output
+
+
+@app.post("/api/export/pptx")
+async def export_pptx(payload: dict = Body(...), _code: None = Depends(require_code)):
+    report = _validated_export_report(payload)
+    output = await asyncio.to_thread(_build_pptx, report)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": 'attachment; filename="video-course.pptx"'},
+    )
+
+
+@app.post("/api/export/pdf")
+async def export_pdf(payload: dict = Body(...), _code: None = Depends(require_code)):
+    report = _validated_export_report(payload)
+    output = await asyncio.to_thread(_build_pdf, report)
+    return StreamingResponse(
+        output,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="video-report.pdf"'},
+    )
 
 
 @app.get("/api/health")
@@ -851,6 +998,7 @@ async def analyze(
     file: UploadFile | None = File(None),
     url: str = Form(None),
     mode: str = Form("standard"),
+    scenario: str = Form("course"),
     _code: None = Depends(require_code),
 ):
     cfg = load_config()
@@ -925,8 +1073,9 @@ async def analyze(
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
         mode, _ = _analysis_context(mode)
+        scenario, _ = _scenario_context(scenario)
         analysis = await asyncio.to_thread(
-            call_qwen, frames, cfg, duration, mode, transcript)
+            call_qwen, frames, cfg, duration, mode, transcript, scenario)
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
@@ -934,6 +1083,7 @@ async def analyze(
             "platform": platform,
             "title": title,
             "mode": mode,
+            "scenario": scenario,
             "speech": speech_status,
         }
         return analysis
@@ -948,6 +1098,7 @@ async def analyze_frames(
     duration: float = Form(...),
     filename: str = Form("course-video"),
     mode: str = Form("standard"),
+    scenario: str = Form("course"),
     _code: None = Depends(require_code),
 ):
     """长课程专用：视频留在浏览器本地，只接收浏览器均匀抽取的 JPEG 关键帧。"""
@@ -976,6 +1127,7 @@ async def analyze_frames(
         )
 
     mode, _ = _analysis_context(mode)
+    scenario, _ = _scenario_context(scenario)
     frame_limits = {"quick": 6, "standard": 18, "deep": 36}
     limit = frame_limits[mode]
     if len(encoded) > limit:
@@ -985,7 +1137,8 @@ async def analyze_frames(
     analysis_slots = await acquire_analysis_slot("frames")
     try:
         check_daily_usage()
-        analysis = await asyncio.to_thread(call_qwen, encoded, cfg, duration, mode)
+        analysis = await asyncio.to_thread(
+            call_qwen, encoded, cfg, duration, mode, "", scenario)
         analysis["_meta"] = {
             "frames": len(encoded),
             "duration": int(duration),
@@ -993,6 +1146,7 @@ async def analyze_frames(
             "platform": "本地文件（浏览器抽帧）",
             "title": Path(filename).name[:120],
             "mode": mode,
+            "scenario": scenario,
             "speech": "仅画面分析（原视频未上传）",
         }
         return analysis
