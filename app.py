@@ -696,7 +696,7 @@ def _model_retry_delay(response, attempt: int) -> float:
 
 SCENARIO_CONTEXT = {
     "course": "本次用于课程与讲座复盘：优先提炼课程结构、知识脉络、教学观点、学习目标与可复习内容。",
-    "creative": "本次用于内容整理与二次创作：优先识别传播亮点、可剪辑片段、创作角度、脚本与平台化表达。",
+    "creative": "本次用于短剧、剧情短视频和电商内容二次创作：优先识别人物关系、冲突、产品植入和分镜结构。长视频先提炼高光主线，再压缩为目标短片，不逐段照搬。",
 }
 
 
@@ -872,7 +872,7 @@ def _agent_plan(analysis: dict, requested: list[str], cfg: dict) -> dict:
     snapshot = json.dumps(_analysis_for_agent(analysis), ensure_ascii=False)[:45000]
     prompt = f"""你是 VideoInsight 的任务规划 Agent。根据已有视频分析和用户目标，选择最有价值的工具。
 只能选择以下工具，最多两步，不得发明工具：
-- creative_pack：生成多时长脚本、精彩片段建议、分镜、小红书文案和短视频口播稿。
+- creative_pack：生成多时长脚本、精彩片段建议、分镜和短视频口播稿。
 - course_pack：生成课程大纲、学习目标、课件页和逐页讲师备注；只适合课程、讲座、知识教学内容。
 用户目标：{json.dumps(requested or ['auto'], ensure_ascii=False)}。如果用户明确指定 creative、course 或 all，必须选择对应工具；只有 auto 才可自由取舍。
 已有分析：{snapshot}
@@ -892,7 +892,7 @@ def _run_agent_tool(tool: str, analysis: dict, cfg: dict) -> dict:
 "scripts":{{"15s":"15秒脚本","30s":"30秒脚本","60s":"60秒脚本","90s":"90秒脚本"}},
 "highlights":[{{"start":"MM:SS","end":"MM:SS","title":"片段标题","reason":"入选原因","hook":"开场钩子"}}],
 "storyboard":[{{"shot":1,"time":"时间范围","visual":"画面建议","narration":"旁白","caption":"屏幕字幕"}}],
-"xiaohongshu":{{"titles":["标题1","标题2","标题3"],"body":"可直接发布的正文","tags":["标签"]}},
+"post_copy":{{"titles":["标题1","标题2","标题3"],"body":"发布视频时使用的简洁配文","tags":["标签"]}},
 "voiceover":{{"title":"口播标题","script":"自然、可直接朗读的口播稿"}}
 }}}}
 精彩片段给 3-6 个，分镜给 5-10 个；禁止虚构原视频不存在的数据、原话或具体画面。"""
@@ -918,8 +918,7 @@ def _agent_quality(result: dict, plan: dict) -> dict:
     selected = [step["tool"] for step in plan.get("steps", [])]
     if "creative_pack" in selected:
         creative = result.get("creative") or {}
-        passed = bool(creative.get("scripts") and creative.get("storyboard") and
-                      creative.get("xiaohongshu"))
+        passed = bool(creative.get("scripts") and creative.get("storyboard"))
         checks.append({"name": "二创素材完整性", "passed": passed})
     if "course_pack" in selected:
         course = result.get("course") or {}
@@ -1113,7 +1112,7 @@ async def creative_workbench(
                        if isinstance(item, dict)]
     images = (original_images[:8] + images)[:12]
     if phase == "script":
-        instruction = """你是短剧情裂变编剧。以目标总时长重新规划剧情，不照抄原片；根据用户选择决定是否换产品、场景、人物或冲突模式，并可参考成熟脚本的结构但不得复制原文。说话人必须继承已校准人物；待确认台词不得擅自归属。完整脚本要写清剧情单元承接、出场人物、人物关系、服装、道具、情绪动作、产品植入方式。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"identity\":\"\",\"personality\":\"\",\"appearance\":\"\",\"wardrobe_by_unit\":[{\"unit\":\"\",\"wardrobe\":\"\"}]}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\",\"placement_strategy\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"target_seconds\":120,\"story_units\":[{\"unit\":1,\"purpose\":\"\",\"transition\":\"\",\"characters\":[],\"wardrobe\":\"\",\"props\":[],\"product_placement\":\"\"}],\"shots\":[{\"shot\":1,\"unit\":1,\"start\":0,\"end\":10,\"speaker\":\"\",\"emotion\":\"\",\"action\":\"\",\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]}}。"""
+        instruction = """你是短剧情裂变编剧。以目标总时长重新规划剧情，不照抄原片；根据用户选择决定是否换产品、场景、人物或冲突模式，并可参考成熟脚本的结构但不得复制原文。说话人必须继承已校准人物；待确认台词不得擅自归属。完整脚本要写清剧情单元承接、出场人物、人物关系、服装、道具、情绪动作、产品植入方式。另生成一份与新视频匹配的通用发布配文，不指定小红书、抖音等平台。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"identity\":\"\",\"personality\":\"\",\"appearance\":\"\",\"wardrobe_by_unit\":[{\"unit\":\"\",\"wardrobe\":\"\"}]}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\",\"placement_strategy\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"target_seconds\":120,\"story_units\":[{\"unit\":1,\"purpose\":\"\",\"transition\":\"\",\"characters\":[],\"wardrobe\":\"\",\"props\":[],\"product_placement\":\"\"}],\"shots\":[{\"shot\":1,\"unit\":1,\"start\":0,\"end\":10,\"speaker\":\"\",\"emotion\":\"\",\"action\":\"\",\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]},\"post_copy\":{\"titles\":[\"标题1\",\"标题2\",\"标题3\"],\"body\":\"与新视频内容一致的简洁发布配文\",\"tags\":[\"标签\"]}}。"""
     elif phase == "storyboard":
         instruction = """你是连续分镜导演。按目标模型单段时长把完整脚本拆成连续分镜组，不按固定帧数；每组对应一段完整剧情，提供九宫格画面规划（1到9格，按实际镜头需要），包含全景/中景/近景/特写变化、前后连续动作、实际出场人物、人物服装、场景和产品素材引用。不要声称已经生成图片。输出 JSON：{\"storyboard\":[{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}],\"grid_prompt\":\"九宫格生图提示词\",\"negative_prompt\":\"\"}]}。"""
     else:
@@ -1222,7 +1221,7 @@ def _build_pdf(report: dict) -> io.BytesIO:
     creative = report.get("creative") or {}
     if creative:
         add_section("多时长脚本", [f"{key}: {value}" for key, value in (creative.get("scripts") or {}).items()])
-        add_section("小红书文案", (creative.get("xiaohongshu") or {}).get("body"))
+        add_section("视频配文案", ((creative.get("post_copy") or creative.get("xiaohongshu") or {}).get("body")))
     doc.build(story)
     output.seek(0)
     return output
@@ -1455,6 +1454,8 @@ async def analyze_frames(
     mode, _ = _analysis_context(mode)
     scenario, _ = _scenario_context(scenario)
     frame_limits = {"quick": 6, "standard": 18, "deep": 36}
+    if scenario == "creative" and duration >= 30 * 60:
+        frame_limits.update({"quick": 8, "standard": 24})
     limit = frame_limits[mode]
     if len(encoded) > limit:
         # 浏览器通常已按模式控制帧数；服务端再做一次上限保护，防止异常请求放大成本。

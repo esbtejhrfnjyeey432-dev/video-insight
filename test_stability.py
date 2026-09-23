@@ -191,8 +191,7 @@ class StabilityTests(unittest.TestCase):
         incomplete = app._agent_quality({"creative": {"scripts": {"60s": "x"}}}, plan)
         self.assertFalse(incomplete["passed"])
         complete = app._agent_quality({
-            "creative": {"scripts": {"60s": "x"}, "storyboard": [{}],
-                         "xiaohongshu": {"body": "x"}},
+            "creative": {"scripts": {"60s": "x"}, "storyboard": [{}]},
             "course": {"outline": [{}], "slides": [{}]},
         }, plan)
         self.assertTrue(complete["passed"])

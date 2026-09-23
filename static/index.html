@@ -219,7 +219,7 @@
         <div class="scenario-grid">
           <label class="scenario-option">
             <input type="radio" name="scenario" value="creative" checked>
-            <span class="scenario-box"><b>内容整理与二次创作</b><span>多人对白校准、剧情理解、裂变脚本、连续分镜组与视频提示词</span></span>
+            <span class="scenario-box"><b>短剧 / 剧情 / 电商二次创作</b><span>适合人物关系清晰、有台词或产品信息的视频；长视频会先提炼主线再压缩创作</span></span>
           </label>
           <label class="scenario-option">
             <input type="radio" name="scenario" value="course">
@@ -290,8 +290,8 @@
         <div class="work-step ready">01 原片理解</div><div class="work-step">02 创作资产</div>
         <div class="work-step">03 新脚本</div><div class="work-step">04 分镜方案</div><div class="work-step">05 视频提示词</div>
       </div>
-      <div class="privacy-line">深度拆解需临时上传原视频：FFmpeg 在应用后端提取镜头和音轨，音轨交由百炼识别台词；任务结束后立即删除临时文件。基础解析仍保持仅上传关键帧。</div>
-      <div class="creative-failure" id="creativeFailure"><b id="creativeFailureTitle">本步骤未完成</b><p id="creativeFailureReason"></p><p id="creativeFailureAction"></p><div class="work-actions"><button id="btnCreativeRetry">重新尝试</button><button class="primary" id="btnCreativeFallback">使用兜底结果继续</button></div></div>
+      <div class="privacy-line">30 分钟内可做逐镜头深度拆解；30 分钟至 3 小时先提炼主线和高光，再压缩为 1～7 分钟的新视频。原片时长与新视频目标时长分别计算，不会互相冲突。</div>
+      <div class="creative-failure" id="creativeFailure"><b id="creativeFailureTitle">本步骤未完成</b><p id="creativeFailureReason"></p><p id="creativeFailureAction"></p><div class="work-actions"><button id="btnCreativeRetry">重新尝试</button><button class="primary" id="btnCreativeFallback">使用当前处理结果继续</button></div></div>
       <div class="work-panel">
         <h3>01 / 原片理解与多人对白校准</h3>
         <p>可选上传 SRT；系统优先采用字幕时间轴，否则调用语音模型。说话人没有可靠证据时会标记“待确认”，并分析核心人物、关系、场景、剧情单元、情绪变化、产品出现时间和前三秒吸引力。</p>
@@ -306,11 +306,10 @@
         <div class="asset-toolbar">
           <label>＋ 添加人物图<input id="personAssets" type="file" accept="image/*" multiple></label>
           <label>＋ 添加产品图<input id="productAssets" type="file" accept="image/*" multiple></label>
-          <label>＋ 添加场景图<input id="sceneAssets" type="file" accept="image/*" multiple></label>
         </div>
         <div class="asset-grid" id="assetGrid"></div>
         <div class="field"><label for="targetTotalDuration">新视频目标时长</label><select id="targetTotalDuration"><option value="60">1 分钟</option><option value="120" selected>2 分钟</option><option value="180">3 分钟</option><option value="240">4 分钟</option><option value="300">5 分钟</option><option value="360">6 分钟</option><option value="420">7 分钟</option></select></div>
-        <div class="asset-toolbar"><label><input type="checkbox" id="varyProduct" checked> 换产品</label><label><input type="checkbox" id="varyScene"> 换场景</label><label><input type="checkbox" id="varyPerson"> 换人物</label><label><input type="checkbox" id="varyConflict"> 换冲突模式</label></div>
+        <div class="asset-toolbar"><label><input type="checkbox" id="varyProduct" checked> 换产品</label><label><input type="checkbox" id="varyPerson"> 换人物</label><label><input type="checkbox" id="varyConflict"> 换冲突模式</label></div>
         <textarea class="work-textarea" id="referenceScript" placeholder="可选：粘贴已经验证过的成熟创意脚本。系统只参考结构，不照抄原文。"></textarea>
         <textarea class="work-textarea" id="creativeRequirements" placeholder="描述本次改编要求，例如：把原片中的人物替换为上传的三位角色，把原产品替换为新产品，保留快节奏反转结构，台词更生活化。"></textarea>
         <div class="work-actions"><button id="btnVoiceRequirement">语音输入要求</button><button class="primary" id="btnNewScript">识别素材并生成新脚本</button></div>
@@ -940,11 +939,11 @@ function renderAgent(a){
   $("agentStatus").innerHTML = route + (tools.length ? "<br>已完成：" + tools.join(" → ") : "");
   var c = a.creative || {};
   if(Object.keys(c).length){
-    var scripts = c.scripts || {}, xhs = c.xiaohongshu || {}, voice = c.voiceover || {};
-    var html = '<div class="sec-title">多平台二创包</div><div class="agent-grid">';
+    var scripts = c.scripts || {}, postCopy = c.post_copy || c.xiaohongshu || {}, voice = c.voiceover || {};
+    var html = '<div class="sec-title">二创内容包</div><div class="agent-grid">';
     html += '<div class="agent-box"><h3>多时长脚本</h3>' + ["15s","30s","60s","90s"].map(function(k){ return scripts[k] ? '<p class="agent-text" data-agent-path="creative.scripts.'+k+'"><b>'+k+'</b> '+esc(scripts[k])+'</p>' : ''; }).join("") + '</div>';
+    html += '<div class="agent-box"><h3>视频配文案</h3><p><b>标题：</b>'+esc((postCopy.titles||[]).join(" / "))+'</p><p class="agent-text" data-agent-path="creative.post_copy.body">'+esc(postCopy.body||"")+'</p><p>'+esc((postCopy.tags||[]).map(function(x){return "#"+x;}).join(" "))+'</p></div>';
     html += '<div class="agent-box"><h3>精彩片段建议</h3><ol>' + (c.highlights||[]).map(function(x){ return '<li><b>'+esc(x.start||"")+'-'+esc(x.end||"")+' '+esc(x.title||"")+'</b><br>'+esc(x.reason||"")+'<br><span class="agent-text">钩子：'+esc(x.hook||"")+'</span></li>'; }).join("") + '</ol></div>';
-    html += '<div class="agent-box"><h3>小红书文案</h3><p><b>备选标题：</b>'+esc((xhs.titles||[]).join(" / "))+'</p><p class="agent-text" data-agent-path="creative.xiaohongshu.body">'+esc(xhs.body||"")+'</p><p>'+esc((xhs.tags||[]).map(function(x){ return "#"+x; }).join(" "))+'</p></div>';
     html += '<div class="agent-box"><h3>'+esc(voice.title||"短视频口播稿")+'</h3><p class="agent-text" data-agent-path="creative.voiceover.script">'+esc(voice.script||"")+'</p></div>';
     html += '</div><div class="sec-title" style="margin-top:16px">分镜建议</div><div class="agent-grid">' + (c.storyboard||[]).map(function(x){ return '<div class="agent-box"><h3>镜头 '+esc(x.shot||"")+' · '+esc(x.time||"")+'</h3><p><b>画面：</b>'+esc(x.visual||"")+'</p><p><b>旁白：</b>'+esc(x.narration||"")+'</p><p><b>字幕：</b>'+esc(x.caption||"")+'</p></div>'; }).join("") + '</div>';
     $("agentCreative").innerHTML = html; $("agentCreative").style.display = "block";
@@ -998,7 +997,7 @@ function showCreativeFailure(stage,error){
   $("creativeFailureTitle").textContent=names[stage]||"本步骤未完成";$("creativeFailureReason").textContent="原因："+copy.reason;$("creativeFailureAction").textContent="处理方式："+copy.action;$("creativeFailure").classList.remove("warn");$("btnCreativeRetry").style.display="inline-block";$("btnCreativeFallback").style.display="inline-block";$("creativeFailure").style.display="block";$("creativeFailure").scrollIntoView({behavior:"smooth",block:"center"});
 }
 function showCreativeWarning(message){
-  creativeFailedStage="deconstruct";$("creativeFailureTitle").textContent="部分识别已自动降级";$("creativeFailureReason").textContent="原因："+message;$("creativeFailureAction").textContent="兜底结果：镜头、关键帧和已有分析均已保留，可以继续生成脚本，也可以稍后重新拆解补充台词。";$("creativeFailure").classList.add("warn");$("creativeFailure").style.display="block";$("btnCreativeRetry").style.display="inline-block";$("btnCreativeFallback").style.display="none";
+  creativeFailedStage="deconstruct";$("creativeFailureTitle").textContent="已使用当前处理结果";$("creativeFailureReason").textContent="说明："+message;$("creativeFailureAction").textContent="镜头、关键帧和已有分析均已保留，可以继续生成脚本，也可以稍后重新识别台词。";$("creativeFailure").classList.add("warn");$("creativeFailure").style.display="block";$("btnCreativeRetry").style.display="inline-block";$("btnCreativeFallback").style.display="none";
 }
 function setWorkbenchStep(count){
   document.querySelectorAll(".work-step").forEach(function(node, i){ node.classList.toggle("ready", i < count); });
@@ -1006,7 +1005,7 @@ function setWorkbenchStep(count){
 function renderDeconstruction(data){
   var shots = data && data.shots || [];
   $("deconstructShots").innerHTML = shots.map(function(shot){
-    var visual=shot.image?'<img src="'+esc(shot.image)+'" alt="镜头 '+esc(shot.shot)+'">':'<div class="shot-placeholder">基础分析兜底 · 无关键帧</div>';
+    var visual=shot.image?'<img src="'+esc(shot.image)+'" alt="镜头 '+esc(shot.shot)+'">':'<div class="shot-placeholder">使用基础分析 · 无关键帧</div>';
     return '<div class="shot-item">'+visual+
       '<div class="shot-body"><div class="shot-time">镜头 '+esc(shot.shot)+' · '+secondsLabel(shot.start)+'–'+secondsLabel(shot.end)+'</div>'+
       '<div class="shot-dialogue">'+esc(shot.dialogue || "（此镜头未识别到台词）")+'</div></div></div>';
@@ -1028,12 +1027,13 @@ function renderDeconstruction(data){
 $("btnDeconstruct").onclick = function(){
   if(!currentFile){ toast("请先在上方选择本地原视频"); return; }
   if(selectedScenario() !== "creative"){ toast("请先选择“内容整理与二次创作”场景"); return; }
+  if(Number(lastResult&&lastResult._meta&&lastResult._meta.duration)>1800){fallbackDeconstruction();showCreativeWarning("原片超过30分钟，已按长视频方式提炼主线，避免上传整段视频导致超时。建议从高光章节截取30分钟以内片段再做逐句复刻。");return;}
   var btn = this, fd = new FormData(); fd.append("file", currentFile, currentFile.name);var sub=$("subtitleFile").files[0];if(sub)fd.append("subtitle",sub,sub.name);
   btn.disabled = true; btn.textContent = "正在理解…"; $("deconstructStatus").textContent = "正在识别镜头、校准多人对白并分析剧情结构，请勿刷新…";
   api("/api/creative/deconstruct", {method:"POST", body:fd})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
     .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast("原片拆解完成"); })
-    .catch(function(e){ $("deconstructStatus").textContent = "深度拆解未完成"; showCreativeFailure("deconstruct",e); toast("拆解失败，已显示原因和兜底方式"); })
+    .catch(function(e){ $("deconstructStatus").textContent = "深度拆解未完成"; showCreativeFailure("deconstruct",e); toast("拆解未完成，已保留当前处理结果"); })
     .finally(function(){ btn.disabled=false; btn.textContent="重新理解原片"; });
 };
 
@@ -1073,7 +1073,6 @@ function renderAssets(){
 }
 $("personAssets").onchange=function(){ addAssets(this.files,"person"); this.value=""; };
 $("productAssets").onchange=function(){ addAssets(this.files,"product"); this.value=""; };
-$("sceneAssets").onchange=function(){ addAssets(this.files,"scene"); this.value=""; };
 $("btnVoiceRequirement").onclick=function(){
   var Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!Recognition){ toast("当前浏览器不支持语音输入，请直接键入要求"); return; }
@@ -1085,7 +1084,7 @@ $("btnVoiceRequirement").onclick=function(){
 };
 function workbenchPayload(phase){
   return {phase:phase, analysis:lastResult||{}, deconstruction:creativeWorkspace.deconstruction||{}, assets:creativeWorkspace.assets,
-    requirements:$("creativeRequirements").value.trim(),reference_script:$("referenceScript").value.trim(),script:creativeWorkspace.script||{},storyboard:creativeWorkspace.storyboard||[],target_duration:Number($("targetDuration").value),target_total_seconds:Number($("targetTotalDuration").value),variation:{product:$("varyProduct").checked,scene:$("varyScene").checked,person:$("varyPerson").checked,conflict:$("varyConflict").checked}};
+    requirements:$("creativeRequirements").value.trim(),reference_script:$("referenceScript").value.trim(),script:creativeWorkspace.script||{},storyboard:creativeWorkspace.storyboard||[],target_duration:Number($("targetDuration").value),target_total_seconds:Number($("targetTotalDuration").value),variation:{product:$("varyProduct").checked,scene:/换场景|场景替换/.test($("creativeRequirements").value),person:$("varyPerson").checked,conflict:$("varyConflict").checked}};
 }
 function callWorkbench(phase, button){
   button.disabled=true; var old=button.textContent; button.textContent="AI 生成中…";
@@ -1099,24 +1098,25 @@ function fallbackDeconstruction(){
   var shots=chapters.map(function(x,i){return {shot:i+1,start:starts[i],end:i+1<starts.length?starts[i+1]:duration,dialogue:"",label:x.label||"",image:""};});
   if(!shots.length)shots=[{shot:1,start:0,end:duration||15,dialogue:(lastResult&&lastResult.speech_summary)||"",label:"全片内容",image:""}];
   var data={duration:duration,shots:shots,transcript:[],transcript_text:"",warning:"深度拆解未成功，当前使用基础分析的章节时间轴建立镜头骨架。"};
-  creativeWorkspace.deconstruction=data;renderDeconstruction(data);toast("已使用基础分析建立兜底镜头");
+  creativeWorkspace.deconstruction=data;renderDeconstruction(data);toast("已使用基础分析建立镜头结构");
 }
 function fallbackScript(){
   var assets=creativeWorkspace.assets.filter(function(x){return !x.hidden;}).map(function(x){return x.id;});
   var shots=(creativeWorkspace.deconstruction&&creativeWorkspace.deconstruction.shots||[]).map(function(x,i){return {shot:x.shot||i+1,start:x.start||0,end:x.end||0,shot_type:"待补充",visual:x.label||"参考原镜头重新设计画面",dialogue:x.dialogue||"",asset_ids:assets.slice(0,4)};});
-  var data={role_profiles:[],product_profiles:[],script:{title:"新短剧脚本（兜底草稿）",creative_angle:"AI 生成暂时失败，已按原片时间结构创建可编辑骨架。",shots:shots}};
+  var title="新短剧脚本（可编辑草稿）";
+  var data={role_profiles:[],product_profiles:[],script:{title:title,creative_angle:"AI 暂未完整返回，已按原片时间结构创建可编辑骨架。",shots:shots},post_copy:{titles:[title],body:"新视频脚本已整理完成，欢迎观看并分享你的看法。",tags:["短视频","二创"]}};
   creativeWorkspace.script=data;renderNewScript(data);hideCreativeFailure();toast("已建立可编辑脚本骨架");
 }
 function fallbackStoryboard(){
   syncWorkbenchScript();var rows=(((creativeWorkspace.script||{}).script||{}).shots||[]).map(function(x,i){return {shot:x.shot||i+1,time:String(x.start||0)+"-"+String(x.end||0)+"s",asset_ids:x.asset_ids||[],edit_plan:"按新脚本替换人物与产品，保持镜头景别和动作连续性。",image_prompt:(x.visual||"重建该镜头画面")+"；人物和产品参考素材："+(x.asset_ids||[]).join("、"),negative_prompt:"人物错位、产品变形、文字乱码、画面不连续"};});
-  creativeWorkspace.storyboard=rows;renderStoryboard(rows);hideCreativeFailure();toast("已生成本地兜底分镜清单");
+  creativeWorkspace.storyboard=rows;renderStoryboard(rows);hideCreativeFailure();toast("已根据当前脚本生成分镜清单");
 }
 function fallbackPrompts(){
   var target=Number($("targetDuration").value)||15,source=creativeWorkspace.storyboard||[],groups=[],current=[],used=0;
-  if(source.some(function(x){return x.panels&&x.panels.length;})){creativeWorkspace.prompts=source.map(function(x,i){return {group:x.group||i+1,source_groups:[x.group||i+1],duration:Number(x.duration)||target,asset_ids:x.asset_ids||[],speakers:(x.panels||[]).map(function(p){return p.speaker;}).filter(Boolean),voice_status:"missing",prompt:(x.grid_prompt||"")+"；"+(x.panels||[]).map(function(p){return (p.shot_size||"")+" "+(p.visual||"")+" "+(p.dialogue||"");}).join("；")};});renderVideoPrompts(creativeWorkspace.prompts);hideCreativeFailure();toast("已按分镜组生成本地兜底提示词");return;}
+  if(source.some(function(x){return x.panels&&x.panels.length;})){creativeWorkspace.prompts=source.map(function(x,i){return {group:x.group||i+1,source_groups:[x.group||i+1],duration:Number(x.duration)||target,asset_ids:x.asset_ids||[],speakers:(x.panels||[]).map(function(p){return p.speaker;}).filter(Boolean),voice_status:"missing",prompt:(x.grid_prompt||"")+"；"+(x.panels||[]).map(function(p){return (p.shot_size||"")+" "+(p.visual||"")+" "+(p.dialogue||"");}).join("；")};});renderVideoPrompts(creativeWorkspace.prompts);hideCreativeFailure();toast("已按分镜组生成提示词");return;}
   source.forEach(function(x,i){var scriptRows=(((creativeWorkspace.script||{}).script||{}).shots||[]),row=scriptRows[i]||{},length=Math.max(.5,(Number(row.end)||0)-(Number(row.start)||0));if(current.length&&used+length>target){groups.push(current);current=[];used=0;}current.push({board:x,row:row});used+=length;});if(current.length)groups.push(current);
   var rows=groups.map(function(items,i){return {group:i+1,start_shot:items[0].board.shot,end_shot:items[items.length-1].board.shot,duration:Math.min(target,Math.round(items.reduce(function(n,x){return n+Math.max(.5,(Number(x.row.end)||0)-(Number(x.row.start)||0));},0))),prompt:items.map(function(x){return "镜头"+x.board.shot+"："+(x.board.image_prompt||x.board.edit_plan||"");}).join("；")+"。保持人物、产品和光线连续，按镜头顺序自然转场。"};});
-  creativeWorkspace.prompts=rows;renderVideoPrompts(rows);hideCreativeFailure();toast("已按时长生成本地兜底提示词");
+  creativeWorkspace.prompts=rows;renderVideoPrompts(rows);hideCreativeFailure();toast("已按时长生成提示词");
 }
 $("btnCreativeRetry").onclick=function(){var map={deconstruct:"btnDeconstruct",script:"btnNewScript",storyboard:"btnStoryboard",prompts:"btnVideoPrompts"},id=map[creativeFailedStage];hideCreativeFailure();if(id)$(id).click();};
 $("btnCreativeFallback").onclick=function(){var map={deconstruct:fallbackDeconstruction,script:fallbackScript,storyboard:fallbackStoryboard,prompts:fallbackPrompts},fn=map[creativeFailedStage];if(fn)fn();};
@@ -1125,7 +1125,9 @@ function renderNewScript(data){
   var profiles=(data.role_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"人物")+'：</b>'+esc(x.identity||"")+'；'+esc(x.personality||"")+'；'+esc(x.appearance||"")+'；造型：'+esc((x.wardrobe_by_unit||[]).map(function(w){return (w.unit||"")+" "+(w.wardrobe||"");}).join(" / ")||x.wardrobe||"")+'</p>';}).join("")+
     (data.product_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"产品")+'：</b>'+esc(x.features||"")+'</p>';}).join("");
   var units=(script.story_units||[]).map(function(x){return '<p><b>剧情单元 '+esc(x.unit)+'：</b>'+esc(x.purpose||"")+'；承接：'+esc(x.transition||"")+'；产品植入：'+esc(x.product_placement||"无")+'</p>';}).join("");
-  var table='<h4>'+esc(script.title||"新短剧脚本")+' · '+esc(script.target_seconds||$("targetTotalDuration").value)+' 秒</h4><p>'+esc(script.creative_angle||"")+'</p>'+profiles+units+'<table><thead><tr><th>镜头</th><th>时间</th><th>人物/情绪</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
+  var copy=data.post_copy||{};
+  var copyHtml='<h4>视频配文案</h4><p><b>标题：</b>'+esc((copy.titles||[]).join(" / "))+'</p><p>'+esc(copy.body||"")+'</p><p>'+esc((copy.tags||[]).map(function(x){return "#"+x;}).join(" "))+'</p>';
+  var table='<h4>'+esc(script.title||"新短剧脚本")+' · '+esc(script.target_seconds||$("targetTotalDuration").value)+' 秒</h4><p>'+esc(script.creative_angle||"")+'</p>'+copyHtml+profiles+units+'<table><thead><tr><th>镜头</th><th>时间</th><th>人物/情绪</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
     rows.map(function(x,i){return '<tr><td>'+esc(x.shot||i+1)+'</td><td>'+esc(x.start)+'–'+esc(x.end)+'s</td><td>'+esc((x.speaker||"")+(x.emotion?" · "+x.emotion:""))+'</td><td contenteditable="true" data-script-field="shot_type" data-script-i="'+i+'">'+esc(x.shot_type||"")+'</td><td contenteditable="true" data-script-field="visual" data-script-i="'+i+'">'+esc(x.visual||"")+'</td><td contenteditable="true" data-script-field="dialogue" data-script-i="'+i+'">'+esc(x.dialogue||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td></tr>';}).join("")+'</tbody></table>';
   $("scriptOutput").innerHTML=table; $("scriptPanel").style.display="block"; setWorkbenchStep(3); $("scriptPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
@@ -1135,7 +1137,7 @@ function syncWorkbenchScript(){
 $("btnNewScript").onclick=function(){
   if(!creativeWorkspace.deconstruction){toast("请先完成原片拆解");return;}
   if(!creativeWorkspace.assets.some(function(x){return !x.hidden;})){toast("请至少添加一张人物或产品素材");return;}
-  var btn=this; callWorkbench("script",btn).then(function(j){creativeWorkspace.script=j;hideCreativeFailure();renderNewScript(j);toast("新脚本已生成，可直接修改");}).catch(function(e){showCreativeFailure("script",e);toast("脚本生成失败，已有内容不会丢失");});
+  var btn=this; callWorkbench("script",btn).then(function(j){creativeWorkspace.script=j;hideCreativeFailure();renderNewScript(j);toast("新脚本已生成，可直接修改");}).catch(function(e){fallbackScript();showCreativeWarning("AI脚本暂未完整返回，已根据现有镜头建立可编辑脚本，可继续修改或重新生成。");});
 };
 function renderStoryboard(rows){
   $("storyboardOutput").innerHTML='<table><thead><tr><th>分镜组</th><th>时间</th><th>素材</th><th>连续性</th><th>九宫格规划</th></tr></thead><tbody>'+rows.map(function(x){var panels=(x.panels||[]).map(function(p){return p.panel+". "+(p.shot_size||"")+" "+(p.visual||"")+" "+(p.emotion_action||"");}).join("；");return '<tr><td>第 '+esc(x.group||x.shot)+' 组</td><td>'+esc(x.time||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td><td>'+esc((x.continuity_in||"")+" → "+(x.continuity_out||""))+'</td><td>'+esc(panels||x.grid_prompt||x.image_prompt||"")+'</td></tr>';}).join("")+'</tbody></table>';
@@ -1222,7 +1224,7 @@ function buildMarkdown(a){
     (c.highlights||[]).forEach(function(x){ md.push("- **"+(x.start||"")+"-"+(x.end||"")+" "+(x.title||"")+"**："+(x.reason||"")+"；钩子："+(x.hook||"")); });
     md.push("\n### 分镜建议");
     (c.storyboard||[]).forEach(function(x){ md.push("- 镜头 "+(x.shot||"")+"（"+(x.time||"")+"）：画面 "+(x.visual||"")+"；旁白 "+(x.narration||"")+"；字幕 "+(x.caption||"")); });
-    var xhs=c.xiaohongshu||{}; md.push("\n### 小红书文案\n"+(xhs.body||"")+"\n\n"+(xhs.tags||[]).map(function(x){return "#"+x;}).join(" "));
+    var copy=c.post_copy||c.xiaohongshu||{}; md.push("\n### 视频配文案\n"+(copy.body||"")+"\n\n"+(copy.tags||[]).map(function(x){return "#"+x;}).join(" "));
   }
   var course=a.course||{};
   if(Object.keys(course).length){
@@ -1266,7 +1268,7 @@ function reportHtml(a){
   html += '<h3>60 秒口播脚本</h3><p>' + esc(r.script||"").replace(/\n/g,"<br>") + '</p>';
   html += '<h3>金句摘录</h3>' + list(r.quotes);
   var c=a.creative||{};
-  if(Object.keys(c).length){ html += '<h2>Agent 二创包</h2>'; Object.keys(c.scripts||{}).forEach(function(k){html+='<h3>'+esc(k)+' 脚本</h3><p>'+esc(c.scripts[k])+'</p>';}); html += '<h3>小红书文案</h3><p>'+esc((c.xiaohongshu||{}).body||'').replace(/\n/g,'<br>')+'</p>'; }
+  if(Object.keys(c).length){ html += '<h2>Agent 二创包</h2>'; Object.keys(c.scripts||{}).forEach(function(k){html+='<h3>'+esc(k)+' 脚本</h3><p>'+esc(c.scripts[k])+'</p>';}); var copy=c.post_copy||c.xiaohongshu||{};html += '<h3>视频配文案</h3><p>'+esc(copy.body||'').replace(/\n/g,'<br>')+'</p>'; }
   var course=a.course||{};
   if(Object.keys(course).length){ html += '<h2>课程整理包</h2><h3>学习目标</h3>'+list(course.learning_objectives)+'<h3>课程大纲</h3>'+(course.outline||[]).map(function(x){return '<p><b>'+esc(x.title||'')+'</b>：'+esc((x.points||[]).join('；'))+'</p>';}).join('')+'<h3>PPT 课件与讲师备注</h3>'+(course.slides||[]).map(function(x,i){return '<h4>'+(i+1)+'. '+esc(x.title||'')+'</h4>'+list(x.bullets)+'<p><b>讲师备注：</b>'+esc(x.speaker_notes||'')+'</p>';}).join(''); }
   html += '<h2>总体总结</h2><p>' + esc(a.overall_summary||"") + '</p>';
