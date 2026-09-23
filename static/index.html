@@ -218,15 +218,15 @@
         <div class="scenario-title">选择一个你的视频场景</div>
         <div class="scenario-grid">
           <label class="scenario-option">
-            <input type="radio" name="scenario" value="creative">
+            <input type="radio" name="scenario" value="creative" checked>
             <span class="scenario-box"><b>内容整理与二次创作</b><span>多人对白校准、剧情理解、裂变脚本、连续分镜组与视频提示词</span></span>
           </label>
           <label class="scenario-option">
-            <input type="radio" name="scenario" value="course" checked>
+            <input type="radio" name="scenario" value="course">
             <span class="scenario-box"><b>课程与讲座复盘</b><span>课程大纲、知识重点、PPT课件、讲师备注和可复习材料</span></span>
           </label>
         </div>
-        <div class="workflow-hint" id="scenarioHint">解析完成后将自动生成课程整理成果，无需再次选择。</div>
+        <div class="workflow-hint" id="scenarioHint">解析完成后可继续做多人对白校准、剧情理解、裂变脚本和连续分镜组。</div>
       </div>
     </div>
     <div id="urlHint" style="display:none;font-size:14px;line-height:1.8;color:var(--muted);margin-top:10px">
@@ -662,7 +662,7 @@ function refreshModeCopy(){
 $("analysisMode").onchange = refreshModeCopy;
 function selectedScenario(){
   var node = document.querySelector('input[name="scenario"]:checked');
-  return node ? node.value : "course";
+  return node ? node.value : "creative";
 }
 document.querySelectorAll('input[name="scenario"]').forEach(function(node){
   node.onchange = function(){
