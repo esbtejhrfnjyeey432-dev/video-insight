@@ -48,7 +48,7 @@ services:
       - key: VI_GRID_DAILY_BUDGET_CNY
         value: "10.00"
       - key: VI_GRID_SERVICE_FEE_CNY
-        value: "0.30"
+        value: "0.10"
       # 生产环境关闭内部解析诊断接口，避免被滥用为下载器或网络探针
       - key: VI_ENABLE_DEBUG
         value: "false"
