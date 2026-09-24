@@ -1429,11 +1429,16 @@ async def creative_workbench(
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key")
-    if len(json.dumps(payload, ensure_ascii=False)) > 18_000_000:
+    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if len(payload_json) > 18_000_000:
         raise HTTPException(413, "素材数据过大，请减少图片数量或压缩图片")
     phase = str(payload.get("phase") or "")
     if phase not in {"script", "storyboard", "prompts"}:
         raise HTTPException(400, "不支持的生成阶段")
+    cache_key = "workbench:" + hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return _with_cache_meta(cached, phase=phase)
     context = {
         "analysis": _analysis_for_agent(payload.get("analysis") or {}),
         "shots": [{k: item.get(k) for k in ("shot", "start", "end", "dialogue")}
@@ -1479,32 +1484,30 @@ async def creative_workbench(
         planned_shots = max(6, min(24, (context["target_total_seconds"] + 14) // 15))
         instruction += f"\n控制篇幅：约 {planned_shots} 个镜头；每个字段只写一到两句必要信息，避免重复服装和背景描写。"
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
-    token_limit = 4096 if phase in {"script", "storyboard"} else 3072
     if phase == "script":
-        # 原片视觉理解已在基础解析/深度拆解阶段完成。脚本阶段直接复用结构化结果，
-        # 避免重复上传图片并等待视觉模型；素材图片留给后续分镜阶段使用。
-        script_tokens = 2300 if context["target_total_seconds"] <= 120 else (
+        token_limit = 2300 if context["target_total_seconds"] <= 120 else (
             3200 if context["target_total_seconds"] <= 300 else 4096)
-        result = await asyncio.to_thread(
-            call_qwen_text_json, prompt, cfg, 0.2, script_tokens)
+    elif phase == "storyboard":
+        token_limit = 2600
     else:
-        result = await asyncio.to_thread(
-            _creative_asset_prompt, prompt, images, cfg, token_limit, 3)
+        token_limit = 1800
+    # 第 1 步已完成原片视觉理解，后续三步只消费结构化脚本数据。
+    # 真正生成九宫格时才把参考图交给视觉模型，避免重复看图造成慢和超时。
+    result = await asyncio.to_thread(
+        call_qwen_text_json, prompt, cfg, 0.2, token_limit)
     if phase == "script":
         result = _sanitize_creative_script(result, payload.get("assets") or [])
     try:
-        return _validate_creative_phase(phase, result)
+        final_result = _validate_creative_phase(phase, result)
     except HTTPException:
         repair_prompt = prompt + "\n上一次结果字段不完整。请严格按指定 JSON 结构补全必填字段，只返回 JSON。"
-        if phase == "script":
-            repaired = await asyncio.to_thread(
-                call_qwen_text_json, repair_prompt, cfg, 0.2, script_tokens)
-        else:
-            repaired = await asyncio.to_thread(
-                _creative_asset_prompt, repair_prompt, images[:4], cfg, token_limit)
+        repaired = await asyncio.to_thread(
+            call_qwen_text_json, repair_prompt, cfg, 0.2, token_limit)
         if phase == "script":
             repaired = _sanitize_creative_script(repaired, payload.get("assets") or [])
-        return _validate_creative_phase(phase, repaired)
+        final_result = _validate_creative_phase(phase, repaired)
+    _cache_put(cache_key, final_result)
+    return final_result
 
 
 @app.post("/api/creative/storyboard-grid")
