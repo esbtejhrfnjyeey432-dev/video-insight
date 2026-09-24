@@ -481,7 +481,7 @@
     <h3 id="gridPayTitle">免费体验额度已用完</h3>
     <p>如需继续生成本组二创九宫格，请支付本次生成服务费用。</p>
     <div class="pay-total" id="gridPayTotal">¥0.00</div>
-    <div class="pay-detail" id="gridPayDetail">含模型资源成本 + 平台服务费 ¥0.20</div>
+    <div class="pay-detail" id="gridPayDetail">含模型资源成本 + 平台服务费 ¥0.30</div>
     <div class="pay-order">订单号：<b id="gridPayOrder">创建中…</b></div>
     <img src="/wechat-pay.png" alt="微信收款码">
     <div class="pay-note">付款后点击下方按钮上传付款截图，管理员核对到账即开通本次生成。</div>
@@ -569,7 +569,7 @@ var gridPayRefs=0,gridPayOrderId="";
 function showGridPayment(quote,refs){
   quote=quote||{};gridPayRefs=Math.max(0,Math.min(3,Number(refs)||0));gridPayOrderId="";
   $("gridPayTotal").textContent="¥"+Number(quote.payable_cny||0).toFixed(2);
-  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台服务费 ¥"+Number(quote.service_fee_cny||0.2).toFixed(2);
+  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台服务费 ¥"+Number(quote.service_fee_cny||0.3).toFixed(2);
   $("gridPayOrder").textContent="创建中…";
   $("gridPayStatus").textContent="";
   var btn=$("btnGridPayUpload");btn.disabled=true;btn.textContent="已付款，上传截图";
