@@ -563,12 +563,22 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
 "characters":[{"id":"char-1","name":"人物A","identity":"","personality":"","appearance":"","wardrobe_by_unit":[{"unit":"剧情单元1","wardrobe":""}]}],
 "relationships":[{"from":"char-1","to":"char-2","relationship":"","changes":""}],
 "scenes":[{"name":"","time_range":"","props":[]}],
-"story_units":[{"unit":1,"time_range":"","summary":"","characters":[],"emotion_changes":[{"character":"","from":"","to":"","cause":""}],"transition":""}],
+"story_units":[{"unit":1,"time_range":"","summary":"","characters":[],"emotion_changes":[{"character":"人物名/整体氛围","from":"此前情绪","to":"当前情绪","cause":"画面或台词依据"}],"transition":"本单元如何承接上一单元并推动下一单元"}],
+"shot_analysis":[{"shot":1,"shot_size":"远景/全景/中景/近景/特写","composition":"人物站位与构图","action":"人物或产品动作","visual_value":"该镜头可复用的拍摄特点"}],
 "product_placements":[{"time_range":"","product":"","method":"","plot_function":""}],
 "appeal_logic":{"first_3_seconds":"","conflict":"","payoffs":[],"pace":"","why_it_works":""},
 "review_required":["需要人工确认的说话人或事实"]}。
-已有基础分析：""" + json.dumps(_analysis_for_agent(base_analysis or {}), ensure_ascii=False)[:12000] + "\n字幕数据：" + json.dumps(compact, ensure_ascii=False)[:36000]
-    return _creative_asset_prompt(prompt, [item.get("image", "") for item in shots[::3]][:12], cfg)
+每个剧情单元的 emotion_changes 和 transition 均为必填；每张参考关键帧都必须在 shot_analysis 中给出景别、构图、动作和实用价值。已有基础分析：""" + json.dumps(_analysis_for_agent(base_analysis or {}), ensure_ascii=False)[:10000] + "\n镜头索引：" + json.dumps([{"shot": x.get("shot"), "start": x.get("start"), "end": x.get("end")} for x in shots[:12]], ensure_ascii=False) + "\n字幕数据：" + json.dumps(compact, ensure_ascii=False)[:34000]
+    images = [item.get("image", "") for item in shots[:12]]
+    result = _creative_asset_prompt(prompt, images, cfg)
+    units = result.get("story_units") or []
+    incomplete = (not result.get("shot_analysis") or not units or
+                  any(not x.get("transition") or not x.get("emotion_changes")
+                      for x in units if isinstance(x, dict)))
+    if incomplete:
+        repair = prompt + "\n上一次结果缺少情绪、剧情承接或原片景别分析。请重新输出完整 JSON；这些字段不得为空。"
+        result = _creative_asset_prompt(repair, images, cfg)
+    return result
 
 
 def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict:
@@ -600,8 +610,20 @@ def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict
         title = str(chapter.get("label") or chapter.get("title") or f"内容段落 {index + 1}")
         time_range = str(chapter.get("time") or "")
         summary = str(chapter.get("summary") or chapter.get("content") or title)
+        lowered = summary.lower()
+        if any(word in lowered for word in ("冲突", "爆雷", "突发", "争吵", "危机")):
+            emotion_from, emotion_to = "平静", "紧张/震惊"
+        elif any(word in lowered for word in ("调查", "确认", "追问", "真相")):
+            emotion_from, emotion_to = "疑惑", "警觉/确认"
+        elif any(word in lowered for word in ("行动", "执行", "决定", "指令")):
+            emotion_from, emotion_to = "犹豫", "坚定"
+        else:
+            emotion_from, emotion_to = "中性", "专注"
         units.append({"unit": index + 1, "time_range": time_range, "summary": summary,
-                      "characters": [], "emotion_changes": [], "transition": ""})
+                      "characters": [], "emotion_changes": [{"character": "整体氛围",
+                      "from": emotion_from, "to": emotion_to,
+                      "cause": "根据章节标题与内容摘要推断，建议结合原片表情复核"}],
+                      "transition": ""})
         scenes.append({"name": title, "time_range": time_range, "props": []})
     remix = analysis.get("remix") if isinstance(analysis, dict) else {}
     cards = remix.get("cards") if isinstance(remix, dict) else []
@@ -615,12 +637,20 @@ def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict
     conflict = str(key_info[1] if len(key_info) > 1 else analysis.get("overall_summary") or "")[:500]
     pace = (f"根据 {len(units)} 个章节节点推断内容推进节奏；需结合原片镜头复核"
             if units else "")
+    for index, unit in enumerate(units):
+        if index == 0:
+            unit["transition"] = ("作为开场建立事件与人物目标" +
+                                  (f"，随后进入“{units[index + 1]['summary']}”" if len(units) > 1 else ""))
+        elif index + 1 < len(units):
+            unit["transition"] = f"承接上一单元结果，并推动到“{units[index + 1]['summary']}”"
+        else:
+            unit["transition"] = "承接上一单元冲突，完成本段收束或进入下一阶段"
     return {
         "speaker_calibration": calibration,
         "characters": [{"id": f"char-{i + 1}", "name": name, "identity": "",
                         "personality": "", "appearance": "", "wardrobe_by_unit": []}
                        for i, name in enumerate(names)],
-        "relationships": [], "scenes": scenes, "story_units": units,
+        "relationships": [], "scenes": scenes, "story_units": units, "shot_analysis": [],
         "product_placements": [],
         "appeal_logic": {"first_3_seconds": first_hook, "conflict": conflict, "payoffs": [], "pace": pace,
                          "why_it_works": appeal_text or str(analysis.get("overall_summary") or "")[:500]},

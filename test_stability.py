@@ -81,6 +81,21 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(result["script"]["story_units"][0]["product_placement"], "")
         self.assertEqual(result["script"]["shots"][0]["asset_ids"], ["person-1"])
 
+    def test_script_workbench_builds_prompt_before_appending_rules(self):
+        model_result = {
+            "role_profiles": [], "product_profiles": [],
+            "script": {"story_units": [{"unit": 1}], "shots": [{"shot": 1}]},
+            "post_copy": {"titles": [], "body": "", "tags": []},
+        }
+        with mock.patch("app.load_config", return_value={"api_key": "test"}), \
+             mock.patch("app._creative_asset_prompt", return_value=model_result) as generate:
+            result = asyncio.run(app.creative_workbench({
+                "phase": "script", "assets": [], "deconstruction": {},
+                "analysis": {}, "target_total_seconds": 60,
+            }, None))
+        self.assertTrue(result["script"]["shots"])
+        self.assertIn("真实性硬规则", generate.call_args.args[0])
+
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
 
