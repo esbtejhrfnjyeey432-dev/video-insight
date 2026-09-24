@@ -12,6 +12,25 @@ import resolver
 
 
 class StabilityTests(unittest.TestCase):
+    def test_platform_vtt_subtitle_is_parsed_with_timestamps(self):
+        parsed = resolver._parse_platform_subtitle(
+            b"WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello world\n\n"
+            b"00:00:03.000 --> 00:00:05.500\nNext line\n", "vtt")
+        self.assertEqual(parsed["text"], "Hello world Next line")
+        self.assertEqual(parsed["segments"][0]["start_ms"], 1000)
+        self.assertEqual(parsed["segments"][1]["end_ms"], 5500)
+
+    def test_platform_manual_subtitle_wins_over_auto_caption(self):
+        info = {
+            "subtitles": {"zh-CN": [{"ext": "vtt", "data":
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n人工字幕\n"}]},
+            "automatic_captions": {"zh": [{"ext": "vtt", "data":
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n自动字幕\n"}]},
+        }
+        subtitle = resolver._subtitle_from_info(info, {})
+        self.assertEqual(subtitle["text"], "人工字幕")
+        self.assertEqual(subtitle["source"], "平台字幕")
+
     def test_srt_parser_preserves_time_and_explicit_speaker(self):
         rows = app._parse_srt("1\n00:00:01,000 --> 00:00:03,200\n小知：别再手抄笔记了\n\n2\n00:00:04,000 --> 00:00:05,000\n没有人物名\n".encode())
         self.assertEqual(rows[0]["speaker"], "小知")
@@ -318,6 +337,32 @@ class StabilityTests(unittest.TestCase):
             "course": {"outline": [{}], "slides": [{}]},
         }, plan)
         self.assertTrue(complete["passed"])
+
+    def test_workbench_audit_blocks_incomplete_project(self):
+        result = app._workbench_audit({
+            "deconstruction": {"shots": [{"shot": 1}]},
+            "assets": [{"id": "person-1", "type": "person"}],
+            "script": {"script": {"shots": [{"visual": "人物走进房间", "dialogue": "你好"}]}},
+            "storyboard": [{"group": 1, "panels": [{"visual": "只有一格"}]}],
+            "prompts": [],
+        })
+        self.assertFalse(result["ready"])
+        self.assertLess(result["score"], 100)
+        self.assertTrue(any(x["name"] == "九宫格" and not x["passed"]
+                            for x in result["checks"]))
+
+    def test_workbench_agent_patches_are_field_limited(self):
+        workbench = {
+            "script": {"script": {"shots": [{"visual": "旧画面"}]}},
+            "storyboard": [{"continuity_in": "旧承接"}],
+        }
+        patches = app._sanitize_agent_patches({"patches": [
+            {"target": "script_shot", "index": 0, "field": "visual", "value": "新画面"},
+            {"target": "script_shot", "index": 0, "field": "asset_ids", "value": "越权"},
+            {"target": "storyboard_group", "index": 9, "field": "continuity_in", "value": "越界"},
+        ]}, workbench)
+        self.assertEqual(patches, [{"target": "script_shot", "index": 0,
+                                    "field": "visual", "value": "新画面", "reason": ""}])
 
     def test_scenario_context_rejects_unknown_values(self):
         self.assertEqual(app._scenario_context("creative")[0], "creative")

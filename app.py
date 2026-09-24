@@ -1358,6 +1358,122 @@ async def agent_enrich(
         agent_slot.release()
 
 
+def _workbench_audit(workbench: dict) -> dict:
+    """本地完成制作前检查，不调用模型，也不把缺失项包装成成功。"""
+    deconstruction = workbench.get("deconstruction") or {}
+    assets = [x for x in (workbench.get("assets") or [])
+              if isinstance(x, dict) and not x.get("hidden")]
+    script = ((workbench.get("script") or {}).get("script") or {})
+    shots = [x for x in (script.get("shots") or []) if isinstance(x, dict)]
+    boards = [x for x in (workbench.get("storyboard") or []) if isinstance(x, dict)]
+    prompts = [x for x in (workbench.get("prompts") or []) if isinstance(x, dict)]
+    checks = []
+
+    def add(name: str, passed: bool, detail: str, action: str = ""):
+        checks.append({"name": name, "passed": bool(passed), "detail": detail,
+                       "action": action})
+
+    add("原片理解", bool(deconstruction.get("shots") or deconstruction.get("understanding")),
+        "已具备原片结构" if deconstruction else "尚未完成原片拆解", "先完成原片理解")
+    add("创作资产", bool(assets), f"已启用 {len(assets)} 项素材" if assets else "没有启用人物、产品或场景素材",
+        "至少添加并启用一项素材")
+    usable_shots = [x for x in shots if str(x.get("visual") or "").strip()]
+    spoken_shots = [x for x in shots if str(x.get("dialogue") or "").strip()]
+    add("新脚本", bool(shots) and len(usable_shots) == len(shots),
+        f"{len(usable_shots)}/{len(shots)} 个镜头具备可拍画面", "重新生成或补齐空画面")
+    add("人物台词", not shots or len(spoken_shots) >= max(1, len(shots) // 2),
+        f"{len(spoken_shots)}/{len(shots)} 个镜头有台词", "补齐需要说话镜头的台词")
+    complete_boards = [x for x in boards if len(x.get("panels") or []) == 9 and
+                       all(str(p.get("visual") or "").strip() for p in (x.get("panels") or []))]
+    add("九宫格", bool(boards) and len(complete_boards) == len(boards),
+        f"{len(complete_boards)}/{len(boards)} 组为完整 9 格", "重新生成不完整的分镜组")
+    board_ids = {int(x.get("group") or i + 1) for i, x in enumerate(boards)}
+    prompt_ids = {int(g) for x in prompts for g in (x.get("source_groups") or [])
+                  if str(g).isdigit()}
+    add("视频提示词", bool(prompts) and board_ids.issubset(prompt_ids),
+        f"已覆盖 {len(prompt_ids & board_ids)}/{len(board_ids)} 个分镜组",
+        "为全部分镜组重新生成提示词")
+    passed = sum(1 for x in checks if x["passed"])
+    score = round(passed / len(checks) * 100) if checks else 0
+    blockers = [x for x in checks if not x["passed"]]
+    return {"score": score, "ready": not blockers, "checks": checks,
+            "blockers": blockers, "summary": ("可以进入后续成片" if not blockers else
+            f"发现 {len(blockers)} 项需要处理的问题")}
+
+
+def _sanitize_agent_patches(raw: dict, workbench: dict) -> list[dict]:
+    """只允许 Agent 修改明确白名单字段，避免模型越权改工程结构。"""
+    allowed = {
+        "script_shot": {"visual", "dialogue", "action", "emotion", "shot_type"},
+        "storyboard_group": {"continuity_in", "continuity_out", "grid_prompt"},
+    }
+    script_count = len((((workbench.get("script") or {}).get("script") or {}).get("shots") or []))
+    board_count = len(workbench.get("storyboard") or [])
+    clean = []
+    for item in (raw.get("patches") or [])[:30]:
+        if not isinstance(item, dict):
+            continue
+        target, field = str(item.get("target") or ""), str(item.get("field") or "")
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        limit = script_count if target == "script_shot" else board_count
+        value = str(item.get("value") or "").strip()
+        if target not in allowed or field not in allowed[target] or not 0 <= index < limit or not value:
+            continue
+        clean.append({"target": target, "index": index, "field": field,
+                      "value": value[:1200], "reason": str(item.get("reason") or "")[:240]})
+    return clean
+
+
+@app.post("/api/agent/workbench")
+async def agent_workbench(
+    payload: dict = Body(...),
+    _code: None = Depends(require_code),
+):
+    """二创工作台 Agent 工具：质检、连续性修复和裂变方向。"""
+    action = str(payload.get("action") or "")
+    workbench = payload.get("workbench") or {}
+    if not isinstance(workbench, dict):
+        raise HTTPException(400, "工作台数据格式不正确")
+    if len(json.dumps(workbench, ensure_ascii=False)) > 600_000:
+        raise HTTPException(413, "工作台数据过大")
+    audit = _workbench_audit(workbench)
+    if action == "audit":
+        return {"action": action, "audit": audit, "model_used": False}
+    if action not in {"repair_continuity", "variants"}:
+        raise HTTPException(400, "不支持的 Agent 动作")
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置 API Key")
+    snapshot = {
+        "analysis": _analysis_for_agent(payload.get("analysis") or {}),
+        "requirements": str(workbench.get("requirements") or "")[:3000],
+        "assets": [{k: x.get(k) for k in ("id", "name", "type")}
+                   for x in (workbench.get("assets") or []) if isinstance(x, dict) and not x.get("hidden")],
+        "script": workbench.get("script") or {},
+        "storyboard": workbench.get("storyboard") or [],
+        "audit": audit,
+    }
+    agent_slot = await acquire_analysis_slot("agent")
+    try:
+        if action == "variants":
+            prompt = """你是短视频裂变策划 Agent。只基于提供的视频分析和真实素材，给出恰好3个差异明显、能继续生成脚本的方向。不得虚构未上传的产品卖点、人物履历或原片数据。每个方向要说明钩子、冲突和需要改变的内容。只输出 JSON：{\"variants\":[{\"title\":\"\",\"angle\":\"\",\"hook\":\"\",\"conflict\":\"\",\"changes\":[\"\"],\"requirement\":\"可直接写入创作要求的完整指令\"}]}。\n工作区：""" + json.dumps(snapshot, ensure_ascii=False)[:55000]
+            result = await asyncio.to_thread(call_qwen_text_json, prompt, cfg, 0.45, 2200)
+            variants = [x for x in (result.get("variants") or []) if isinstance(x, dict)][:3]
+            if len(variants) != 3 or any(not str(x.get("requirement") or "").strip() for x in variants):
+                raise HTTPException(502, "Agent 没有生成完整的三个裂变方向")
+            return {"action": action, "variants": variants, "audit": audit, "model_used": True}
+        prompt = """你是影视连续性修复 Agent。检查脚本中的人物、台词、动作、情绪、景别和分镜组承接，只提出确有必要的修复。不能增加不存在的人物、产品和事实。通过受控补丁返回修改，不要返回整份脚本。target 只能是 script_shot 或 storyboard_group；index 从0开始；script_shot field 只能是 visual/dialogue/action/emotion/shot_type，storyboard_group field 只能是 continuity_in/continuity_out/grid_prompt。只输出 JSON：{\"summary\":\"\",\"patches\":[{\"target\":\"script_shot\",\"index\":0,\"field\":\"visual\",\"value\":\"修复后的内容\",\"reason\":\"修复原因\"}]}。\n工作区：""" + json.dumps(snapshot, ensure_ascii=False)[:60000]
+        result = await asyncio.to_thread(call_qwen_text_json, prompt, cfg, 0.2, 3200)
+        patches = _sanitize_agent_patches(result, workbench)
+        return {"action": action, "summary": str(result.get("summary") or "连续性检查完成")[:500],
+                "patches": patches, "audit": audit, "model_used": True}
+    finally:
+        agent_slot.release()
+
+
 @app.get("/api/asr-media/{token}")
 def asr_media(token: str):
     """供百炼在短时间内拉取拆解音轨；随机令牌过期后立即失效。"""
@@ -2090,8 +2206,8 @@ async def analyze(
             try:
                 # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
                 remote_info = await asyncio.to_thread(
-                    resolver.resolve_stream_info, url.strip(), tmpdir)
-                platform, title, stream_url, duration, media_headers = remote_info
+                    resolver.resolve_stream_info, url.strip(), tmpdir, True)
+                platform, title, stream_url, duration, media_headers, platform_subtitle = remote_info
                 if duration <= 0:
                     duration = await asyncio.to_thread(
                         get_duration, stream_url, media_headers) or 0
@@ -2115,23 +2231,28 @@ async def analyze(
         transcript = ""
         speech_status = "仅画面分析"
         if url and url.strip() and remote_info is not None:
-            # 抽帧与语音转写并行执行，避免 ASR 排队阻塞画面理解的总耗时
+            # 平台已有字幕时直接复用，省去 ASR 的等待、费用和失败点；
+            # 无字幕才让抽帧与语音转写并行执行。
             frames_task = asyncio.to_thread(
                 extract_remote_frames, stream_url, duration, media_headers)
-
-            async def _run_asr() -> str:
-                try:
-                    return await asyncio.to_thread(
-                        transcribe_remote_audio, stream_url, cfg)
-                except Exception as exc:
-                    logger.warning("asr_fallback platform=%s reason=%s", platform, exc)
-                    return ""
-
-            asr_task = asyncio.create_task(_run_asr())
-            frames = await frames_task
-            transcript = await asr_task
+            transcript = str((platform_subtitle or {}).get("text") or "")
             if transcript:
-                speech_status = "画面 + 语音转写"
+                frames = await frames_task
+                speech_status = "画面 + " + str(platform_subtitle.get("source") or "平台字幕")
+            else:
+                async def _run_asr() -> str:
+                    try:
+                        return await asyncio.to_thread(
+                            transcribe_remote_audio, stream_url, cfg)
+                    except Exception as exc:
+                        logger.warning("asr_fallback platform=%s reason=%s", platform, exc)
+                        return ""
+
+                asr_task = asyncio.create_task(_run_asr())
+                frames = await frames_task
+                transcript = await asr_task
+                if transcript:
+                    speech_status = "画面 + 语音转写"
         else:
             frames, duration = await asyncio.to_thread(extract_frames, vpath)
         if not frames:

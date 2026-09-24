@@ -169,6 +169,7 @@
   .work-textarea{width:100%;min-height:88px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;resize:vertical}.work-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .generated-grid{margin-top:14px;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff}.generated-grid img{display:block;width:min(100%,720px);aspect-ratio:1/1;object-fit:contain;border-radius:9px;background:#111}.generated-grid .grid-caption{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;font-size:13px;color:var(--muted)}.generated-grid a{color:var(--blue-d);text-decoration:none;font-weight:600}.generated-grid a:hover{text-decoration:underline}
   .prompt-list{display:grid;gap:12px}.prompt-card{border:1px solid var(--line);border-radius:12px;padding:15px;background:linear-gradient(180deg,#fff,#f8fafc);box-shadow:0 4px 14px rgba(42,48,83,.04)}.prompt-card-head{display:flex;align-items:center;gap:11px;margin-bottom:10px}.prompt-num{width:30px;height:30px;flex:none;border-radius:9px;background:var(--blue);color:#fff;display:grid;place-items:center;font-size:14px;font-weight:800}.prompt-head-main{flex:1;min-width:0}.prompt-head-main h4{font-size:14px;color:var(--text);margin:0}.prompt-range{font-size:12px;color:var(--muted);margin-top:2px}.voice-badge{flex:none;font-size:11px;font-weight:600;padding:4px 9px;border-radius:999px}.voice-badge.ok{background:var(--teal-l);color:var(--teal-d)}.voice-badge.warn{background:var(--amber-l);color:var(--amber)}
+  .agent-tools{margin-top:14px;padding:16px;border:1px solid #d9def7;border-radius:14px;background:linear-gradient(135deg,#fafaff,#f4fbff)}.agent-tools-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.agent-tools-head p{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.6}.agent-tool-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.agent-tool-output{display:none;margin-top:13px}.audit-score{display:flex;align-items:center;gap:12px;margin-bottom:10px}.audit-score strong{font-size:28px;color:var(--blue-d)}.audit-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.audit-item{padding:10px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:12px}.audit-item.ok{border-color:#b7e4d5;background:#f2fcf8}.audit-item.bad{border-color:#f0c7c4;background:#fff7f6}.variant-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.variant-card{padding:13px;border:1px solid var(--line);border-radius:11px;background:#fff}.variant-card h4{margin-bottom:6px}.variant-card p{font-size:12px;color:#4d5965;line-height:1.65}.patch-list{display:grid;gap:7px}.patch-item{padding:10px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:12px}
   .work-output{margin-top:12px;overflow-x:auto}.work-output table{width:100%;border-collapse:collapse;font-size:12px}.work-output th,.work-output td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}.work-output th{background:#f4f7fa}.work-output td[contenteditable="true"]{background:#fffdf1}.script-table{min-width:1120px;table-layout:fixed}.script-table th:nth-child(1){width:52px}.script-table th:nth-child(2){width:82px}.script-table th:nth-child(3){width:130px}.script-table th:nth-child(4){width:150px}.script-table th:nth-child(5){width:260px}.script-table th:nth-child(6){width:330px}.script-table th:nth-child(7){width:150px}.script-table td{line-height:1.65;word-break:break-word}
   .privacy-line{font-size:12px;color:#6b5320;background:#fff8e8;border:1px solid #efddb1;border-radius:8px;padding:9px 11px}
   .creative-failure{display:none;margin:12px 0;padding:12px 14px;border:1px solid #e6b2ae;border-radius:9px;background:#fff4f3;color:#812b25;font-size:13px}
@@ -375,6 +376,11 @@
         <div class="work-step">03 新脚本</div><div class="work-step">04 分镜方案</div><div class="work-step">05 视频提示词</div>
       </div>
       <div class="privacy-line">系统会根据视频内容自动匹配合适的整理方式：梳理镜头结构、提炼故事主线与高光片段，为后续改写脚本和规划分镜打好基础。</div>
+      <div class="agent-tools">
+        <div class="agent-tools-head"><div><b>Agent 制作助手</b><p>读取当前工作台状态后执行真实检查或生成结果；不会把缺失内容当作完成。</p></div><span class="tag">可执行工具</span></div>
+        <div class="agent-tool-actions"><button id="btnAgentAudit">成片前质检</button><button id="btnAgentContinuity">检查并修复连贯性</button><button id="btnAgentVariants">生成 3 个裂变方向</button></div>
+        <div class="agent-tool-output" id="agentToolOutput"></div>
+      </div>
       <div class="work-panel">
         <h3>01 / 原片理解与多人对白校准</h3>
         <p>可选上传 SRT 字幕。系统将整理镜头、台词、核心人物、人物关系、场景、剧情单元、情绪变化、产品出现时间和前三秒吸引力。</p>
@@ -1017,7 +1023,7 @@ function render(a){
   /* PPTX 是课件交付格式，只在课程复盘结果中出现；二创保留更实用的脚本类导出。 */
   $("btnPpt").style.display = scenario === "course" ? "inline-block" : "none";
   var t = meta.title ? " · 《" + esc(meta.title.length > 24 ? meta.title.slice(0, 24) + "…" : meta.title) + "》" : "";
-  $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 视频约 " + (meta.duration || 0) + " 秒 · 内容分析完成";
+  $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 视频约 " + (meta.duration || 0) + " 秒 · " + esc(meta.speech || "仅画面分析") + " · 内容分析完成";
   $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return '<li data-editable="1">' + esc(p) + "</li>"; }).join("");
   $("chapters").innerHTML = (a.chapters || []).map(function(c){
     return '<li><span class="t clickable" data-editable="1" data-time="' + esc(c.time) + '">' + esc(c.time) + '</span><span data-editable="1">' + esc(c.label) + "</span></li>";
@@ -1233,6 +1239,39 @@ function workbenchPayload(phase){
   return {phase:phase, analysis:lastResult||{}, deconstruction:creativeWorkspace.deconstruction||{}, assets:creativeWorkspace.assets,
     requirements:requirements,reference_script:$("referenceScript").value.trim(),script:creativeWorkspace.script||{},storyboard:creativeWorkspace.storyboard||[],target_duration:Number($("targetDuration").value),target_total_seconds:Number($("targetTotalDuration").value),variation:{product:hasType("product")||/换产品|产品替换/.test(requirements),scene:hasType("scene")||/换场景|场景替换/.test(requirements),person:hasType("person")||/换人物|人物替换/.test(requirements),conflict:/换冲突|冲突模式|冲突替换/.test(requirements)}};
 }
+var lastWorkbenchAgentResult=null;
+function agentWorkbenchPayload(action){
+  syncWorkbenchScript();
+  return {action:action,analysis:lastResult||{},workbench:{
+    deconstruction:{shots:((creativeWorkspace.deconstruction||{}).shots||[]).map(function(x){return {shot:x.shot,start:x.start,end:x.end,dialogue:x.dialogue,label:x.label};}),understanding:(creativeWorkspace.deconstruction||{}).understanding||{}},
+    assets:creativeWorkspace.assets.map(function(x){return {id:x.id,name:x.name,type:x.type,hidden:x.hidden};}),
+    requirements:$("creativeRequirements").value.trim(),script:creativeWorkspace.script||{},storyboard:creativeWorkspace.storyboard||[],prompts:creativeWorkspace.prompts||[]
+  }};
+}
+function renderWorkbenchAudit(audit){
+  audit=audit||{};var checks=audit.checks||[];
+  return '<div class="audit-score"><strong>'+esc(audit.score||0)+'</strong><div><b>制作完整度</b><br><span class="tip">'+esc(audit.summary||"")+'</span></div></div><div class="audit-list">'+checks.map(function(x){return '<div class="audit-item '+(x.passed?'ok':'bad')+'"><b>'+(x.passed?'✓ ':'需处理 · ')+esc(x.name||"")+'</b><br>'+esc(x.detail||"")+(x.passed||!x.action?'':'<br><span class="tip">建议：'+esc(x.action)+'</span>')+'</div>';}).join("")+'</div>';
+}
+function renderWorkbenchAgent(result){
+  lastWorkbenchAgentResult=result;var output=$("agentToolOutput"),html=renderWorkbenchAudit(result.audit);
+  if(result.action==="variants")html+='<h4 style="margin:14px 0 8px">可采用的裂变方向</h4><div class="variant-grid">'+(result.variants||[]).map(function(x,i){return '<div class="variant-card"><h4>'+esc(x.title||("方向 "+(i+1)))+'</h4><p><b>角度：</b>'+esc(x.angle||"")+'<br><b>钩子：</b>'+esc(x.hook||"")+'<br><b>冲突：</b>'+esc(x.conflict||"")+'</p><button data-use-variant="'+i+'">采用此方向</button></div>';}).join("")+'</div>';
+  if(result.action==="repair_continuity")html+='<h4 style="margin:14px 0 8px">连贯性修复建议</h4><p class="tip">'+esc(result.summary||"")+'</p><div class="patch-list">'+(result.patches||[]).map(function(x){return '<div class="patch-item"><b>'+esc(x.target==="script_shot"?"脚本镜头 "+(x.index+1):"分镜组 "+(x.index+1))+' · '+esc(x.field)+'</b><br>'+esc(x.value)+'<br><span class="tip">'+esc(x.reason||"")+'</span></div>';}).join("")+'</div>'+((result.patches||[]).length?'<button class="primary" id="btnApplyAgentPatches" style="margin-top:10px">应用全部安全修复</button>':'<p class="tip">没有发现需要修改的连贯性问题。</p>');
+  output.innerHTML=html;output.style.display="block";
+  document.querySelectorAll("[data-use-variant]").forEach(function(btn){btn.onclick=function(){var item=(result.variants||[])[Number(btn.dataset.useVariant)];if(!item)return;$("creativeRequirements").value=item.requirement||"";$("creativeRequirements").scrollIntoView({behavior:"smooth",block:"center"});toast("裂变方向已写入创作要求，可继续生成新脚本");};});
+  var apply=$("btnApplyAgentPatches");if(apply)apply.onclick=function(){applyAgentPatches(result.patches||[]);};
+}
+function applyAgentPatches(patches){
+  var shots=(((creativeWorkspace.script||{}).script||{}).shots||[]),boards=creativeWorkspace.storyboard||[],applied=0;
+  patches.forEach(function(x){var row=x.target==="script_shot"?shots[x.index]:boards[x.index];if(row&&Object.prototype.hasOwnProperty.call(x,"value")){row[x.field]=x.value;applied++;}});
+  if(creativeWorkspace.script)renderNewScript(creativeWorkspace.script);if(boards.length)renderStoryboard(boards);toast("已应用 "+applied+" 项连贯性修复");
+}
+function runWorkbenchAgent(action,button){
+  if(!lastResult){toast("请先完成视频分析");return;}var old=button.textContent;button.disabled=true;button.textContent="Agent 执行中…";
+  api("/api/agent/workbench",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(agentWorkbenchPayload(action))}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"Agent 执行失败");return j;});}).then(function(j){renderWorkbenchAgent(j);toast(action==="audit"?"制作质检完成":action==="variants"?"裂变方向已生成":"连贯性检查完成");}).catch(function(e){toast(e.message||"Agent 暂未完成，现有工程已保留");}).finally(function(){button.disabled=false;button.textContent=old;});
+}
+$("btnAgentAudit").onclick=function(){runWorkbenchAgent("audit",this);};
+$("btnAgentContinuity").onclick=function(){runWorkbenchAgent("repair_continuity",this);};
+$("btnAgentVariants").onclick=function(){runWorkbenchAgent("variants",this);};
 function callWorkbench(phase, button){
   button.disabled=true; var old=button.textContent; button.textContent="AI 生成中…";
   return api("/api/creative/workbench",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(workbenchPayload(phase))})

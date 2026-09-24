@@ -8,6 +8,7 @@ resolver.py · 通用视频链接解析下载（粘什么平台的链接都能�
   每一级失败自动降级到下一级，全部失败时给出可操作的中文提示。
 """
 import glob
+import html
 import ipaddress
 import json
 import os
@@ -28,6 +29,7 @@ DESKTOP_UA = (
 
 MAX_VIDEO_BYTES = int(os.environ.get("VI_LINK_MAX_VIDEO_MB", "750")) * 1024 * 1024
 VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi", ".flv", ".ts")
+MAX_SUBTITLE_BYTES = 2 * 1024 * 1024
 
 
 def validate_public_url(url: str) -> str:
@@ -132,6 +134,99 @@ def extract_url(text: str):
         return m.group(0)
     t = text.strip()
     return t if t.startswith("http") else None
+
+
+def _subtitle_time_ms(value: str) -> int:
+    """Parse SRT/VTT timestamps without introducing another dependency."""
+    parts = value.strip().replace(",", ".").split(":")
+    try:
+        seconds = float(parts[-1])
+        minutes = int(parts[-2]) if len(parts) >= 2 else 0
+        hours = int(parts[-3]) if len(parts) >= 3 else 0
+        return max(0, int((hours * 3600 + minutes * 60 + seconds) * 1000))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_platform_subtitle(content: bytes, ext: str = "") -> dict:
+    """Turn a platform SRT/VTT/JSON3 track into clean, time-aware text."""
+    if not content or len(content) > MAX_SUBTITLE_BYTES:
+        return {"text": "", "segments": []}
+    text = content.decode("utf-8-sig", errors="replace")
+    segments = []
+    if ext == "json3" or text.lstrip().startswith("{"):
+        try:
+            data = json.loads(text)
+            for event in data.get("events") or []:
+                body = "".join(str(x.get("utf8") or "") for x in (event.get("segs") or []))
+                body = re.sub(r"\s+", " ", body).strip()
+                if not body:
+                    continue
+                start = int(event.get("tStartMs") or 0)
+                end = start + int(event.get("dDurationMs") or 0)
+                segments.append({"start_ms": start, "end_ms": max(start, end), "text": body})
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {"text": "", "segments": []}
+    else:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        pattern = re.compile(
+            r"(?m)^(?:\d+\s*\n)?\s*([\d:. ,]+)\s*-->\s*([\d:. ,]+)[^\n]*\n"
+            r"(.*?)(?=\n\s*\n|\Z)", re.S)
+        for match in pattern.finditer(normalized):
+            body = re.sub(r"<[^>]+>", "", match.group(3))
+            body = html.unescape(re.sub(r"\s+", " ", body)).strip()
+            if not body or body.upper().startswith(("WEBVTT", "NOTE")):
+                continue
+            start, end = _subtitle_time_ms(match.group(1)), _subtitle_time_ms(match.group(2))
+            segments.append({"start_ms": start, "end_ms": max(start, end), "text": body})
+    # Auto captions often repeat the previous rolling line; remove exact adjacent duplicates.
+    clean = []
+    for item in segments:
+        if clean and clean[-1]["text"] == item["text"]:
+            clean[-1]["end_ms"] = max(clean[-1]["end_ms"], item["end_ms"])
+        else:
+            clean.append(item)
+    return {"text": " ".join(x["text"] for x in clean)[:120000], "segments": clean[:5000]}
+
+
+def _subtitle_from_info(info: dict, headers: dict) -> dict:
+    """Prefer human subtitles, then automatic captions, before paying for ASR."""
+    language_order = ("zh-Hans", "zh-CN", "zh", "zh-Hant", "en", "en-US")
+    for source_key, source_label in (("subtitles", "平台字幕"),
+                                     ("automatic_captions", "平台自动字幕")):
+        tracks = info.get(source_key) or {}
+        if not isinstance(tracks, dict) or not tracks:
+            continue
+        languages = sorted(
+            tracks, key=lambda lang: next(
+                (i for i, wanted in enumerate(language_order)
+                 if lang == wanted or lang.startswith(wanted + "-")), 999))
+        for language in languages:
+            formats = tracks.get(language) or []
+            formats = sorted(
+                (x for x in formats if isinstance(x, dict)),
+                key=lambda x: {"json3": 0, "vtt": 1, "srt": 2}.get(x.get("ext"), 9))
+            for track in formats:
+                raw = track.get("data")
+                if isinstance(raw, str):
+                    content = raw.encode("utf-8")
+                else:
+                    subtitle_url = track.get("url")
+                    if not isinstance(subtitle_url, str) or not subtitle_url.startswith(("http://", "https://")):
+                        continue
+                    try:
+                        validate_public_url(subtitle_url)
+                        response = requests.get(subtitle_url, headers=headers, timeout=20)
+                        if response.status_code != 200 or len(response.content) > MAX_SUBTITLE_BYTES:
+                            continue
+                        content = response.content
+                    except Exception:
+                        continue
+                parsed = _parse_platform_subtitle(content, str(track.get("ext") or ""))
+                if parsed["text"]:
+                    parsed.update({"language": language, "source": source_label})
+                    return parsed
+    return {"text": "", "segments": [], "language": "", "source": ""}
 
 
 def _save_stream(resp, dest: str):
@@ -580,7 +675,7 @@ def resolve_ytdlp(url: str, outdir: str, ffmpeg_path: str = None):
     raise ResolveError(_translate_ytdlp_error(last_err or "未知错误"))
 
 
-def resolve_stream_info(text: str, outdir: str):
+def resolve_stream_info(text: str, outdir: str, include_subtitles: bool = False):
     """只解析远程媒体地址和时长，不下载整段视频。
 
     长课程若先完整下载，会轻易耗尽免费云实例的磁盘/内存。本函数让上层用
@@ -622,8 +717,11 @@ def resolve_stream_info(text: str, outdir: str):
         duration = float(video.get("duration") or 0)
         if not pick.get("url") or duration <= 0:
             raise ResolveError("Vimeo 未返回视频直链或时长")
-        return ("Vimeo", (video.get("title") or "")[:80], pick["url"], duration,
-                {"User-Agent": DESKTOP_UA, "Referer": "https://vimeo.com/"})
+        result = ("Vimeo", (video.get("title") or "")[:80], pick["url"], duration,
+                  {"User-Agent": DESKTOP_UA, "Referer": "https://vimeo.com/"})
+        if include_subtitles:
+            return result + ({"text": "", "segments": [], "language": "", "source": ""},)
+        return result
     try:
         import yt_dlp
     except ImportError:
@@ -670,7 +768,10 @@ def resolve_stream_info(text: str, outdir: str):
     merged_headers = dict(headers)
     merged_headers.update(info.get("http_headers") or {})
     platform = (info.get("extractor_key") or info.get("extractor") or "在线视频")[:40]
-    return platform, (info.get("title") or "")[:80], stream_url, duration, merged_headers
+    subtitle = (_subtitle_from_info(info, merged_headers) if include_subtitles
+                else {"text": "", "segments": [], "language": "", "source": ""})
+    result = (platform, (info.get("title") or "")[:80], stream_url, duration, merged_headers)
+    return result + (subtitle,) if include_subtitles else result
 
 
 def _translate_ytdlp_error(msg: str) -> str:

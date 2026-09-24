@@ -57,10 +57,13 @@ assert(context.buildMarkdown(sample).includes("已编辑的关键信息"),
   "Markdown export missed edited content");
 assert(context.reportHtml(sample).includes("语音内容摘要"),
   "Word/PDF export missed speech summary");
+assert(html.includes('esc(meta.speech || "仅画面分析")'),
+  "Result metadata must disclose whether platform subtitles, ASR, or vision-only analysis was used");
 
 for (const id of ["historyCard", "btnClearHistory", "videoPlayer", "btnEdit", "btnWord", "btnPdf",
   "subtitleFile", "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript",
-  "capabilityHub", "toolIntent", "btnClearIntent"]) {
+  "capabilityHub", "toolIntent", "btnClearIntent", "btnAgentAudit", "btnAgentContinuity",
+  "btnAgentVariants", "agentToolOutput"]) {
   assert(html.includes('id="' + id + '"'), "Missing UI control: " + id);
 }
 const realTools = [...html.matchAll(/data-tool="([^"]+)"/g)].map((match) => match[1]);
@@ -71,6 +74,8 @@ for (const unsupported of ["voice-clone", "ocr", "cover-generator", "batch-accou
 }
 assert(html.includes("function activateToolIntent"), "Capability cards must route to a real workflow");
 assert(html.includes("continueToolIntent();"), "Selected capability must continue after analysis");
+assert(html.includes('/api/agent/workbench'), "Workbench Agent tools must call a real backend endpoint");
+assert(html.includes('function applyAgentPatches'), "Continuity repair must be applicable, not display-only");
 for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {
   assert(!html.includes('id="' + id + '"'), "Removed variation toggle is still visible: " + id);
 }
