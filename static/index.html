@@ -35,6 +35,7 @@
   .input-card{border-color:#DADFFE;box-shadow:0 18px 45px rgba(53,55,166,.1)}
   .input-card-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.input-card-title h2{font-size:18px;line-height:1.35}.input-card-title p{font-size:12px;color:var(--muted);margin-top:3px}.input-badge{flex:none;padding:5px 9px;border-radius:999px;background:var(--teal-l);color:var(--teal-d);font-size:11px;font-weight:700}
   .quick-flow{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}.flow-item{display:flex;gap:11px;align-items:center;padding:13px 15px;background:rgba(255,255,255,.78);border:1px solid var(--line);border-radius:14px}.flow-num{width:30px;height:30px;flex:none;border-radius:10px;display:grid;place-items:center;background:var(--blue-l);color:var(--blue-d);font-size:12px;font-weight:800}.flow-item b{display:block;font-size:13px}.flow-item span{display:block;font-size:11px;color:var(--muted)}
+  .capability-hub{margin-bottom:18px}.capability-head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:14px}.capability-head h2{font-size:21px}.capability-head p{font-size:13px;color:var(--muted);max-width:560px}.capability-badge{flex:none;padding:5px 10px;border-radius:999px;background:var(--teal-l);color:var(--teal-d);font-size:11px;font-weight:700}.tool-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px}.tool-card{min-height:150px;padding:17px;text-align:left;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,#fff,#f9faff);display:flex;flex-direction:column;align-items:flex-start;box-shadow:0 5px 18px rgba(42,48,83,.045)}.tool-card:hover{border-color:#b9bff6;box-shadow:0 12px 26px rgba(66,69,166,.11)}.tool-icon{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,var(--blue-l),#e8e4ff);color:var(--blue-d);font-size:18px;font-weight:800;margin-bottom:12px}.tool-card strong{font-size:15px;color:var(--text);margin-bottom:5px}.tool-card small{display:block;color:var(--muted);font-size:12px;line-height:1.55;flex:1}.tool-go{margin-top:11px;color:var(--blue-d);font-size:12px;font-weight:700}.tool-intent{display:none;margin-bottom:14px;padding:11px 13px;border:1px solid #cfd4ff;border-radius:11px;background:linear-gradient(135deg,#f8f8ff,#f0f2ff);font-size:13px;color:var(--blue-d)}.tool-intent.show{display:flex;align-items:center;justify-content:space-between;gap:10px}.tool-intent b{display:block}.tool-intent span{color:var(--muted);font-size:12px}.tool-intent button{padding:4px 9px;font-size:11px}
   .tabs{display:inline-flex;gap:4px;margin-bottom:16px;padding:4px;background:#F0F2F8;border-radius:12px}
   .tab{padding:8px 17px;border-radius:9px;border:0;font-size:14px;background:transparent;cursor:pointer}
   .tab.active{background:#fff;color:var(--blue-d);font-weight:600;box-shadow:0 4px 12px rgba(42,48,83,.08)}
@@ -172,7 +173,46 @@
   .privacy-line{font-size:12px;color:#6b5320;background:#fff8e8;border:1px solid #efddb1;border-radius:8px;padding:9px 11px}
   .creative-failure{display:none;margin:12px 0;padding:12px 14px;border:1px solid #e6b2ae;border-radius:9px;background:#fff4f3;color:#812b25;font-size:13px}
   .creative-failure.warn{display:block;border-color:#efddb1;background:#fff8e8;color:#6b5320}.creative-failure b{display:block;margin-bottom:4px}.creative-failure p{line-height:1.7}.creative-failure .work-actions{margin-top:8px}
-  @media(max-width:700px){header{padding:11px 14px}.logo small{display:none}.btns{gap:6px}.btns button{padding:7px 10px;font-size:12px}main{padding:18px 12px 54px}.quick-flow{grid-template-columns:1fr}.use-case-grid,.scenario-grid{grid-template-columns:1fr}.use-cases{padding:18px}.hero{padding:28px 22px;border-radius:19px}.hero h1{font-size:27px}.hero-points{gap:7px}.card{padding:19px;border-radius:15px}.input-card-title{align-items:center}.work-steps{grid-template-columns:1fr 1fr}.work-output{overflow-x:auto}.work-output table{min-width:680px}}
+  /* Visual polish only: keeps every control, workflow and API behavior unchanged. */
+  html{scroll-behavior:smooth}
+  body{min-height:100vh;letter-spacing:.01em;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  ::selection{background:rgba(91,92,226,.18);color:var(--text)}
+  header{min-height:64px;padding-inline:max(24px,calc((100vw - 1120px)/2));box-shadow:0 1px 0 rgba(255,255,255,.8),0 8px 28px rgba(42,48,83,.035)}
+  .logo{letter-spacing:-.25px}.logo small{letter-spacing:0}
+  main{max-width:1040px;padding-top:38px}
+  .hero{isolation:isolate;padding:48px 48px 44px;border:1px solid rgba(255,255,255,.16);box-shadow:0 28px 70px rgba(53,55,166,.2),inset 0 1px 0 rgba(255,255,255,.16)}
+  .hero::before{content:"";position:absolute;z-index:-1;width:220px;height:220px;left:-75px;bottom:-145px;border-radius:50%;border:42px solid rgba(255,255,255,.06)}
+  .hero h1{text-wrap:balance;text-shadow:0 2px 14px rgba(20,20,80,.16)}
+  .hero p{line-height:1.8}.hero-point{border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(7px)}
+  .card{border-color:rgba(220,225,237,.9);box-shadow:0 10px 30px rgba(42,48,83,.055),0 1px 2px rgba(42,48,83,.035)}
+  .input-card{box-shadow:0 20px 52px rgba(53,55,166,.095),0 1px 3px rgba(42,48,83,.04)}
+  .quick-flow{gap:12px}.flow-item{position:relative;overflow:hidden;min-height:68px;box-shadow:0 4px 14px rgba(42,48,83,.03);transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease}.flow-item:hover{transform:translateY(-2px);border-color:#D4D9F8;box-shadow:0 10px 24px rgba(42,48,83,.07)}
+  .flow-num{box-shadow:inset 0 0 0 1px rgba(91,92,226,.06)}
+  button{min-height:38px;font-weight:500;box-shadow:0 1px 2px rgba(42,48,83,.025)}
+  button:active{transform:translateY(0) scale(.985);box-shadow:none}
+  button:focus-visible,.tab:focus-visible{outline:3px solid rgba(91,92,226,.2);outline-offset:2px}
+  button:disabled{opacity:.72;transform:none!important;box-shadow:none!important}
+  .tabs{border:1px solid rgba(225,229,240,.9)}
+  .drop{position:relative;min-height:164px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-width:2px;box-shadow:inset 0 1px 0 rgba(255,255,255,.85)}
+  .drop::before{content:"＋";display:grid;place-items:center;width:42px;height:42px;margin-bottom:11px;border-radius:13px;background:var(--blue-l);color:var(--blue);font-size:25px;font-weight:300;box-shadow:0 6px 16px rgba(91,92,226,.12)}
+  .drop:hover,.drop.over{transform:translateY(-1px);box-shadow:0 10px 26px rgba(91,92,226,.09),inset 0 1px 0 #fff}
+  .urlrow input,.analysis-options select,.work-textarea{border-radius:11px;transition:border-color .18s,box-shadow .18s,background .18s}
+  .urlrow input:focus,.analysis-options select:focus,.work-textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 4px rgba(91,92,226,.09);background:#fff}
+  .scenario-box{min-height:92px;box-shadow:0 3px 12px rgba(42,48,83,.025)}
+  .scenario-option:hover .scenario-box{border-color:#C9CEF2;transform:translateY(-1px);box-shadow:0 9px 22px rgba(42,48,83,.06)}
+  .sec-title{font-size:16px;letter-spacing:-.12px}.sec-title::before{content:"";width:4px;height:18px;flex:none;border-radius:99px;background:linear-gradient(180deg,var(--blue),#8B5CF6)}
+  #historyCard{padding:22px 24px}#historyList{max-height:250px;overflow:auto;padding-right:3px;scrollbar-width:thin;scrollbar-color:#CCD2DF transparent}
+  .history-item{padding:12px 14px;border-radius:12px;background:linear-gradient(180deg,#fff,#FAFBFE);transition:border-color .18s,box-shadow .18s,transform .18s}.history-item:hover{border-color:#D3D8EC;box-shadow:0 7px 18px rgba(42,48,83,.055);transform:translateY(-1px)}
+  .work-steps{position:relative;gap:9px}.work-step{min-height:44px;display:grid;place-items:center;border-radius:11px;transition:.2s}.work-step.ready{box-shadow:0 5px 13px rgba(91,92,226,.09)}
+  .work-panel{padding-top:22px;margin-top:22px}.work-panel h3{font-size:16px}
+  .work-output{border-radius:12px;scrollbar-width:thin;scrollbar-color:#C8CFDD transparent}.work-output table{background:#fff}.work-output th{position:sticky;top:0;z-index:1;background:#F3F5FA;color:#4A5568;font-weight:700}.work-output tr{transition:background .15s}.work-output tbody tr:hover{background:#FAFBFF}.work-output td[contenteditable="true"]:focus{outline:2px solid rgba(91,92,226,.32);outline-offset:-2px;background:#FFFDF4}
+  .shot-item,.asset-card,.agent-box,.rcard{transition:transform .18s,border-color .18s,box-shadow .18s}.shot-item:hover,.asset-card:hover,.agent-box:hover,.rcard:hover{transform:translateY(-2px);border-color:#D1D7E7;box-shadow:0 9px 22px rgba(42,48,83,.07)}
+  .bar{height:9px;box-shadow:inset 0 1px 2px rgba(42,48,83,.07)}.bar i{background:linear-gradient(90deg,var(--blue),#8B5CF6,var(--teal));background-size:180% 100%;animation:progressGlow 2s linear infinite}@keyframes progressGlow{to{background-position:-180% 0}}
+  .toast{box-shadow:0 14px 38px rgba(23,32,51,.24);backdrop-filter:blur(10px)}
+  footer{padding-top:22px}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+  @media(max-width:700px){header{padding:11px 14px}.logo small{display:none}.btns{gap:6px}.btns button{padding:7px 10px;font-size:12px}main{padding:18px 12px 54px}.quick-flow{grid-template-columns:1fr}.tool-grid{grid-template-columns:1fr 1fr}.tool-card{min-height:145px;padding:14px}.capability-head{align-items:flex-start}.capability-badge{display:none}.use-case-grid,.scenario-grid{grid-template-columns:1fr}.use-cases{padding:18px}.hero{padding:28px 22px;border-radius:19px}.hero h1{font-size:27px}.hero-points{gap:7px}.card{padding:19px;border-radius:15px}.input-card-title{align-items:center}.work-steps{grid-template-columns:1fr 1fr}.work-output{overflow-x:auto}.work-output table{min-width:680px}}
+  @media(max-width:430px){.tool-grid{grid-template-columns:1fr}.tool-card{min-height:132px}.capability-head h2{font-size:19px}}
 </style>
 <script>window.VI_API_BASE = "https://video-insight-9q9i.onrender.com";</script>
 </head>
@@ -212,11 +252,27 @@
     <div class="flow-item"><span class="flow-num">03</span><span><b>带走成果</b><span>编辑、导出或继续生成二创内容</span></span></div>
   </section>
 
+  <section class="card capability-hub" id="capabilityHub" aria-labelledby="capabilityTitle">
+    <div class="capability-head">
+      <div><h2 id="capabilityTitle">选择想交给 AI 的任务</h2><p>每个入口都连接现有处理链路；选择后会自动匹配场景与分析深度，不展示尚未接通的功能。</p></div>
+      <span class="capability-badge">6 项能力已接通</span>
+    </div>
+    <div class="tool-grid">
+      <button type="button" class="tool-card" data-tool="extract" data-scenario="course" data-mode="standard"><span class="tool-icon">文</span><strong>内容提取与时间轴</strong><small>提取关键信息、语音摘要、章节时间轴和总体总结。</small><span class="tool-go">开始使用 →</span></button>
+      <button type="button" class="tool-card" data-tool="dialogue" data-scenario="creative" data-mode="deep"><span class="tool-icon">声</span><strong>多人对白与剧情理解</strong><small>结合 SRT 与语音识别校准说话人，整理人物、关系、场景和情绪。</small><span class="tool-go">开始使用 →</span></button>
+      <button type="button" class="tool-card" data-tool="hooks" data-scenario="creative" data-mode="deep"><span class="tool-icon">拆</span><strong>爆款结构拆解</strong><small>分析前三秒钩子、冲突、节奏、产品植入和高光片段。</small><span class="tool-go">开始使用 →</span></button>
+      <button type="button" class="tool-card" data-tool="scripts" data-scenario="creative" data-mode="standard"><span class="tool-icon">写</span><strong>多时长脚本重写</strong><small>根据原片结构生成多时长脚本、口播稿与通用视频配文案。</small><span class="tool-go">开始使用 →</span></button>
+      <button type="button" class="tool-card" data-tool="storyboard" data-scenario="creative" data-mode="deep"><span class="tool-icon">镜</span><strong>连续九宫格分镜</strong><small>从新脚本继续生成连续分镜组、完整九宫格规划和视频提示词。</small><span class="tool-go">开始使用 →</span></button>
+      <button type="button" class="tool-card" data-tool="course" data-scenario="course" data-mode="deep"><span class="tool-icon">课</span><strong>课程复盘与课件</strong><small>生成课程大纲、学习重点、PPT 页面内容和讲师备注。</small><span class="tool-go">开始使用 →</span></button>
+    </div>
+  </section>
+
   <div class="card input-card">
     <div class="input-card-title">
       <div><h2>开始处理视频</h2><p>先选择来源和使用场景，系统会自动匹配处理流程</p></div>
       <span class="input-badge">无需安装</span>
     </div>
+    <div class="tool-intent" id="toolIntent"><div><b id="toolIntentTitle"></b><span id="toolIntentNote"></span></div><button type="button" id="btnClearIntent">更换任务</button></div>
     <div class="tabs">
       <div class="tab active" data-tab="upload">上传视频（推荐）</div>
       <div class="tab" data-tab="url">视频链接</div>
@@ -446,6 +502,7 @@ var currentFile = null, currentTab = "upload", lastResult = null, timer = null;
 var activeSourceUrl = "", activeSourceType = "", activeSourceName = "", previewObjectUrl = "";
 var reportEditing = false, activeHistoryId = "", HISTORY_KEY = "vi_recent_tasks_v1", HISTORY_LIMIT = 10;
 var creativeWorkspace = {deconstruction:null, assets:[], script:null, storyboard:[], prompts:[]};
+var activeToolIntent = "";
 var accessCode = localStorage.getItem("vi_code") || "";
 function resetCreativeWorkspace(){
   creativeWorkspace={deconstruction:null,assets:[],script:null,storyboard:[],prompts:[]};
@@ -702,6 +759,41 @@ document.querySelectorAll('input[name="scenario"]').forEach(function(node){
     refreshModeCopy();
   };
 });
+
+var TOOL_INTENTS = {
+  extract:{title:"内容提取与时间轴",note:"完成基础解析后直接查看关键信息、语音摘要、章节与总结。"},
+  dialogue:{title:"多人对白与剧情理解",note:"完成基础解析后，在二创工作台继续执行“原片理解与多人对白校准”。"},
+  hooks:{title:"爆款结构拆解",note:"Agent 会先整理钩子、冲突、节奏、产品植入和高光片段。"},
+  scripts:{title:"多时长脚本重写",note:"Agent 会自动生成多时长脚本；需要换人物或产品时可继续进入二创工作台。"},
+  storyboard:{title:"连续九宫格分镜",note:"先完成原片理解和新脚本，再生成连续九宫格与视频提示词。"},
+  course:{title:"课程复盘与课件",note:"自动生成课程大纲、学习重点、PPT 页面和讲师备注。"}
+};
+function activateToolIntent(button){
+  var tool=button.dataset.tool,scenario=button.dataset.scenario,mode=button.dataset.mode;
+  if(!TOOL_INTENTS[tool])return;
+  activeToolIntent=tool;
+  var radio=document.querySelector('input[name="scenario"][value="'+scenario+'"]');
+  if(radio){radio.checked=true;radio.onchange();}
+  if(mode&&$("analysisMode")){ $("analysisMode").value=mode;refreshModeCopy(); }
+  $("toolIntentTitle").textContent="已选择："+TOOL_INTENTS[tool].title;
+  $("toolIntentNote").textContent=TOOL_INTENTS[tool].note;
+  $("toolIntent").classList.add("show");
+  document.querySelector(".input-card").scrollIntoView({behavior:"smooth",block:"start"});
+}
+document.querySelectorAll("[data-tool]").forEach(function(button){button.onclick=function(){activateToolIntent(button);};});
+$("btnClearIntent").onclick=function(){activeToolIntent="";$("toolIntent").classList.remove("show");$("capabilityHub").scrollIntoView({behavior:"smooth",block:"start"});};
+
+function continueToolIntent(){
+  if(!activeToolIntent)return;
+  if(activeToolIntent==="dialogue"||activeToolIntent==="storyboard"){
+    setTimeout(function(){
+      $("creativeWorkbench").scrollIntoView({behavior:"smooth",block:"start"});
+      toast(activeToolIntent==="dialogue"?"基础解析完成，请继续进行多人对白校准":"基础解析完成，请按工作台步骤生成新脚本和九宫格");
+    },350);
+  }else if(activeToolIntent==="course"||activeToolIntent==="hooks"||activeToolIntent==="scripts"){
+    setTimeout(function(){if($("agentCard").style.display!=="none")$("agentCard").scrollIntoView({behavior:"smooth",block:"start"});},500);
+  }
+}
 function seekVideo(video, time){
   return new Promise(function(resolve, reject){
     var done = function(){ cleanup(); resolve(); };
@@ -881,6 +973,7 @@ $("btnGo").onclick = async function(){
                                     isUpload && currentFile ? currentFile.name : "");
       toast("基础解析完成，正在生成场景成果");
       runScenarioAgent((res.j._meta || {}).scenario || selectedScenario(), true);
+      continueToolIntent();
     })
     .catch(function(e){
       stopProgress(false); $("btnGo").disabled = false;
@@ -1223,10 +1316,10 @@ function renderStoryboard(rows){
     var panels=(x.panels||[]).slice(0,9),cells=[];
     if(!panels.length)panels=[{panel:1,shot_size:"规划",visual:x.image_prompt||x.edit_plan||x.grid_prompt||"待补充分镜画面",dialogue:""}];
     panels.forEach(function(p,i){cells.push('<div class="plan-cell"><b><span class="pnum">'+(p.panel||i+1)+'</span><span class="shot-size">'+esc(p.shot_size||"镜头")+'</span></b>'+esc(p.visual||"")+(p.emotion_action?'<br><span class="pc-emotion">'+esc(p.emotion_action)+'</span>':'')+(p.dialogue?'<br><span class="pc-line">台词：'+esc(p.dialogue)+'</span>':'')+'</div>');});
-    while(cells.length<9)cells.push('<div class="plan-cell empty">待生成画面</div>');
-    var meta='<span class="plan-grid-meta">'+esc(x.time||"")+' · '+panels.length+' 格</span>';
+    while(cells.length<9)cells.push('<div class="plan-cell empty">画面缺失<br>请重新生成</div>');
+    var complete=panels.length===9,meta='<span class="plan-grid-meta">'+esc(x.time||"")+' · '+panels.length+'/9 格'+(complete?' · 完整':' · 不完整')+'</span>';
     var generated=x.generated_grid_url?'<div class="generated-grid"><img src="'+esc(x.generated_grid_url)+'" alt="第 '+esc(x.group||index+1)+' 组二创九宫格"><div class="grid-caption"><span>第 '+esc(x.group||index+1)+' 组 · 二创九宫格</span><a href="'+esc(x.generated_grid_url)+'" target="_blank" rel="noopener">查看 / 保存原图</a></div></div>':'';
-    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'">生成本组二创九宫格</button><span class="tip">预计 ¥0.18～0.24，确认后调用百炼</span></div>'+generated+'</div>';
+    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'预计 ¥0.18～0.24，确认后调用百炼':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
   }).join("")+'</div>';
   $("storyboardOutput").innerHTML=table+grids;
   document.querySelectorAll("[data-generate-grid]").forEach(function(button){button.onclick=function(){
