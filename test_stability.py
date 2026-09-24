@@ -174,6 +174,13 @@ class StabilityTests(unittest.TestCase):
         sent = post.call_args_list[0].kwargs["json"]
         self.assertEqual(sent["response_format"], {"type": "json_object"})
         self.assertFalse(sent["enable_thinking"])
+        self.assertEqual(sent["model"], app.FAST_VISION_MODEL)
+
+    def test_deep_analysis_keeps_configured_quality_model(self):
+        self.assertEqual(
+            app._analysis_model({"model": "qwen3-vl-plus"}, "deep"),
+            "qwen3-vl-plus",
+        )
 
     def test_model_does_not_retry_permanent_client_error(self):
         rejected = mock.Mock(status_code=400, headers={})

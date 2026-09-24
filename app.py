@@ -95,6 +95,7 @@ ASR_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
 ASR_MODEL = os.environ.get(
     "VI_ASR_MODEL", "qwen-audio-3.0-asr-flash-filetrans").strip()
 DEFAULT_MODEL = "qwen3-vl-plus"
+FAST_VISION_MODEL = os.environ.get("VI_FAST_VISION_MODEL", "qwen-vl-plus").strip()
 AGENT_MODEL = os.environ.get("VI_AGENT_MODEL", "qwen-plus").strip()
 MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
 # 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 6 帧 / 640px）
@@ -922,6 +923,12 @@ def _scenario_context(scenario: str) -> tuple[str, str]:
     return safe, "\n\n使用场景：" + SCENARIO_CONTEXT[safe]
 
 
+def _analysis_model(cfg: dict, mode: str) -> str:
+    """快速/标准优先低延迟模型，深度模式保留用户选择的高质量模型。"""
+    return FAST_VISION_MODEL if mode in {"quick", "standard"} else (
+        cfg.get("model") or DEFAULT_MODEL)
+
+
 def call_qwen(frames: list, cfg: dict, duration: float | None = None,
               mode: str = "standard", transcript: str = "",
               scenario: str = "course") -> dict:
@@ -933,6 +940,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
         )
     mode, context_note = _analysis_context(mode)
     scenario, scenario_note = _scenario_context(scenario)
+    model = _analysis_model(cfg, mode)
     transcript_note = ""
     if transcript:
         transcript_note = (
@@ -943,10 +951,10 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
     for f in frames:
         content.append({"type": "image_url", "image_url": {"url": f}})
     body = {
-        "model": cfg.get("model") or DEFAULT_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.3,
-        "max_tokens": 4096,
+        "max_tokens": 3072 if mode in {"quick", "standard"} else 4096,
         "enable_thinking": False,
         "response_format": {"type": "json_object"},
     }
@@ -959,7 +967,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
                     "Authorization": "Bearer " + cfg["api_key"],
                     "Content-Type": "application/json",
                 },
-                json=body, timeout=300,
+                json=body, timeout=90 if mode in {"quick", "standard"} else 240,
             )
         except Exception as exc:
             logger.warning("model_request_failed attempt=%s type=%s", attempt + 1,
@@ -1902,7 +1910,7 @@ async def analyze(
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
-            "model": cfg.get("model") or DEFAULT_MODEL,
+            "model": _analysis_model(cfg, mode),
             "platform": platform,
             "title": title,
             "mode": mode,
@@ -1967,7 +1975,7 @@ async def analyze_frames(
         analysis["_meta"] = {
             "frames": len(encoded),
             "duration": int(duration),
-            "model": cfg.get("model") or DEFAULT_MODEL,
+            "model": _analysis_model(cfg, mode),
             "platform": "本地文件（浏览器抽帧）",
             "title": Path(filename).name[:120],
             "mode": mode,
