@@ -1504,6 +1504,7 @@ async def creative_workbench(
         instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
     if phase == "script":
         instruction += """\n真实性硬规则：只能引用 assets 中真实存在的 asset_id；没有 product 类型素材时 product_profiles 和 product_placement 必须为空，台词与画面不得虚构产品、品牌、价格、人物履历或原片未提供的事实；信息不足时使用中性描述并标记待确认。"""
+        instruction += """\n镜头字段硬规则：每个 shot_type 必须写成“景别 · 机位/运镜”（如“中景 · 平视跟拍”）；每个 visual 必须描述可直接拍摄的新画面、主体动作及与前后镜头的衔接。禁止填写“待补充”“待确认”或“参考原镜头重新设计画面”。"""
         planned_shots = max(6, min(24, (context["target_total_seconds"] + 14) // 15))
         instruction += f"\n控制篇幅：约 {planned_shots} 个镜头；每个字段只写一到两句必要信息，避免重复服装和背景描写。"
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
