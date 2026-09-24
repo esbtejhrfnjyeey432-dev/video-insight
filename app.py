@@ -104,6 +104,9 @@ GRID_USAGE_PATH = Path(os.environ.get(
 PAYMENT_PROOF_DIR = Path(os.environ.get(
     "VI_PAYMENT_PROOF_DIR", str(Path(tempfile.gettempdir()) / "video-insight-payment-proofs")))
 PAYMENT_ADMIN_TOKEN = os.environ.get("VI_PAYMENT_ADMIN_TOKEN", "").strip()
+SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
+PAYMENT_ADMIN_URL = os.environ.get(
+    "VI_PAYMENT_ADMIN_URL", "https://video-insight-9q9i.onrender.com/payment-admin.html").strip()
 _grid_usage_lock = threading.Lock()
 
 
@@ -114,8 +117,7 @@ def _load_grid_usage() -> dict:
             return data
     except (OSError, ValueError, TypeError):
         pass
-    return {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0,
-            "clients": {}, "credits": {}, "orders": {}}
+    return {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
 
 
 _grid_usage = _load_grid_usage()
@@ -134,7 +136,6 @@ def _save_grid_usage_locked() -> None:
 def _grid_client_key(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
     host = forwarded or (request.client.host if request.client else "unknown")
-    # 只按网络来源计额，换浏览器或清理本地缓存都不会重置免费额度。
     return hashlib.sha256(host.encode("utf-8")).hexdigest()[:32]
 
 
@@ -208,6 +209,24 @@ def _require_payment_admin(token: str) -> None:
         raise HTTPException(503, "尚未配置付款审核口令")
     if not hmac.compare_digest(token or "", PAYMENT_ADMIN_TOKEN):
         raise HTTPException(403, "审核口令不正确")
+
+
+def _notify_payment_order(order: dict) -> None:
+    if not SERVERCHAN_SENDKEY:
+        return
+    key = SERVERCHAN_SENDKEY
+    match = re.match(r"sctp(\d+)t", key)
+    url = (f"https://{match.group(1)}.push.ft07.com/send/{key}.send" if match else
+           f"https://sctapi.ftqq.com/{key}.send")
+    try:
+        requests.post(url, json={"title": "收到新的九宫格付款截图",
+            "desp": f"订单：{order['order_id']}\n\n应付：¥{order['amount_cny']:.2f}\n\n[打开审核后台]({PAYMENT_ADMIN_URL})",
+            "short": f"订单 {order['order_id']} 待审核"}, timeout=12)
+    except requests.RequestException as exc:
+        logger.warning("payment_notify_failed reason=%s", exc)
+
+
+_ORDER_ID_RE = re.compile(r"^VI[A-F0-9]{8}$")
 
 
 def _cache_get(key: str, store: dict | None = None) -> dict | None:
@@ -2237,6 +2256,111 @@ async def export_pdf(payload: dict = Body(...), _code: None = Depends(require_co
 def health():
     """Render 健康检查专用，不依赖外部模型或视频平台。"""
     return {"ok": True, "service": "video-insight"}
+
+
+@app.post("/api/payment/order")
+async def payment_order(request: Request, payload: dict = Body(default={}),
+                        _code: None = Depends(require_code)):
+    """锁定本次生成的应付金额：价格由服务端按参考素材数计算，客户端不可自报金额。"""
+    try:
+        refs = max(0, min(3, int(payload.get("reference_count") or 0)))
+    except (TypeError, ValueError):
+        refs = 0
+    amount = round(_grid_model_cost(refs) + GRID_SERVICE_FEE_CNY, 2)
+    order_id = "VI" + uuid.uuid4().hex[:8].upper()
+    keys = quota_identity.visitor_keys(request)
+    with _grid_usage_lock:
+        _grid_usage.setdefault("orders", {})[order_id] = {
+            "order_id": order_id, "amount_cny": amount, "status": "pending",
+            "keys": keys, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _save_grid_usage_locked()
+    return {"order_id": order_id, "amount_cny": amount}
+
+
+@app.post("/api/payment/proof")
+async def payment_proof(
+    order_id: str = Form(...),
+    screenshot: UploadFile = File(...),
+    _code: None = Depends(require_code),
+):
+    """用户上传微信付款截图；保存并推送提醒，由管理员人工核对金额后开通。"""
+    if not _ORDER_ID_RE.fullmatch(order_id or ""):
+        raise HTTPException(400, "订单号格式不正确")
+    content_type = (screenshot.content_type or "").lower()
+    if content_type not in ("image/png", "image/jpeg", "image/webp"):
+        raise HTTPException(400, "请上传 PNG / JPG / WebP 格式的付款截图")
+    raw = await screenshot.read()
+    if not 1024 <= len(raw) <= 5 * 1024 * 1024:
+        raise HTTPException(400, "截图大小需在 1KB~5MB 之间")
+    ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[content_type]
+    with _grid_usage_lock:
+        order = _grid_usage.setdefault("orders", {}).get(order_id)
+        if not order:
+            raise HTTPException(404, "订单不存在，请返回重新发起生成")
+        if order.get("status") == "approved":
+            raise HTTPException(400, "该订单已开通，无需重复提交")
+        PAYMENT_PROOF_DIR.mkdir(parents=True, exist_ok=True)
+        path = PAYMENT_PROOF_DIR / f"{order_id}.{ext}"
+        path.write_bytes(raw)
+        order["status"] = "reviewing"
+        order["proof"] = path.name
+        _save_grid_usage_locked()
+    _notify_payment_order(order)
+    return {"ok": True,
+            "message": "付款截图已提交，管理员核对到账后会尽快开通本次生成。"}
+
+
+@app.get("/api/payment/orders")
+def payment_orders(token: str = ""):
+    """审核后台：列出全部订单（需管理员口令）。"""
+    _require_payment_admin(token)
+    with _grid_usage_lock:
+        orders = [dict(v, order_id=k) if "order_id" not in v else dict(v)
+                  for k, v in _grid_usage.get("orders", {}).items()]
+    orders.sort(key=lambda x: str(x.get("created") or ""), reverse=True)
+    return {"orders": orders}
+
+
+@app.get("/api/payment/proof/{order_id}")
+def payment_proof_file(order_id: str, token: str = ""):
+    """审核后台：查看订单对应的付款截图（需管理员口令）。"""
+    _require_payment_admin(token)
+    if not _ORDER_ID_RE.fullmatch(order_id or ""):
+        raise HTTPException(400, "订单号格式不正确")
+    matches = sorted(PAYMENT_PROOF_DIR.glob(f"{order_id}.*")) if PAYMENT_PROOF_DIR.is_dir() else []
+    if not matches:
+        raise HTTPException(404, "该订单还没有上传截图")
+    media = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}.get(
+        matches[0].suffix.lstrip("."), "application/octet-stream")
+    return FileResponse(matches[0], media_type=media)
+
+
+@app.post("/api/payment/review")
+async def payment_review(payload: dict = Body(...)):
+    """管理员审核：批准即按订单绑定身份加 1 次生成额度（换设备/换网络仍有效）。"""
+    _require_payment_admin(str(payload.get("token") or ""))
+    order_id = str(payload.get("order_id") or "")
+    action = str(payload.get("action") or "")
+    if not _ORDER_ID_RE.fullmatch(order_id):
+        raise HTTPException(400, "订单号格式不正确")
+    with _grid_usage_lock:
+        order = _grid_usage.setdefault("orders", {}).get(order_id)
+        if not order:
+            raise HTTPException(404, "订单不存在")
+        if action == "approve":
+            order["status"] = "approved"
+            order["reviewed"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            credits = _grid_usage.setdefault("credits", {})
+            for key in order.get("keys") or []:
+                credits[key] = int(credits.get(key, 0)) + 1
+        elif action == "reject":
+            order["status"] = "rejected"
+            order["reviewed"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            raise HTTPException(400, "action 仅支持 approve / reject")
+        _save_grid_usage_locked()
+    return {"ok": True, "status": order["status"]}
 
 
 def readiness_checks() -> dict:

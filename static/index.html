@@ -133,7 +133,7 @@
   .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(91,92,226,.1)}
   .note{font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 12px;margin-bottom:14px}
   .modal .btns{justify-content:flex-end;display:flex;gap:10px;margin-top:6px}
-  .pay-modal{text-align:center;max-width:410px}.pay-modal img{display:block;width:min(100%,280px);max-height:360px;object-fit:contain;margin:16px auto;border:1px solid var(--line);border-radius:14px}.pay-total{font-size:26px;font-weight:800;color:var(--blue-d);margin:8px 0}.pay-detail{font-size:12px;color:var(--muted);line-height:1.7}.pay-note{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--amber-l);color:var(--amber);font-size:13px;text-align:left}
+  .pay-modal{text-align:center;max-width:410px}.pay-modal img{display:block;width:min(100%,280px);max-height:360px;object-fit:contain;margin:16px auto;border:1px solid var(--line);border-radius:14px}.pay-total{font-size:26px;font-weight:800;color:var(--blue-d);margin:8px 0}.pay-detail{font-size:12px;color:var(--muted);line-height:1.7}.pay-order{font-size:13px;margin:8px 0 2px;color:var(--text)}.pay-order b{font-family:ui-monospace,Consolas,monospace;letter-spacing:1px;color:var(--blue-d);user-select:all}.pay-status{font-size:12px;color:var(--teal-d);min-height:18px;margin-top:6px;word-break:break-all}.pay-note{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--amber-l);color:var(--amber);font-size:13px;text-align:left}
   .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:10px 22px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:99}
   .toast.show{opacity:.95}
   .gate{display:none;position:fixed;inset:0;background:rgba(246,248,249,.97);z-index:80;align-items:center;justify-content:center}
@@ -479,11 +479,17 @@
 <div class="modal-mask" id="gridPayMask" role="dialog" aria-modal="true" aria-labelledby="gridPayTitle">
   <div class="modal pay-modal">
     <h3 id="gridPayTitle">免费体验额度已用完</h3>
-    <p>如需继续生成本组二创九宫格，请支付本次平台生成费用。</p>
+    <p>如需继续生成本组二创九宫格，请支付本次生成服务费用。</p>
     <div class="pay-total" id="gridPayTotal">¥0.00</div>
-    <div class="pay-detail" id="gridPayDetail">报价包含模型资源成本与平台处理服务费。</div>
-    <img src="/wechat-pay.jpg" alt="微信收款码">
-    <div class="pay-note">付款后请联系网站管理员，并提供付款截图，由管理员人工开通继续使用。</div>
+    <div class="pay-detail" id="gridPayDetail">含模型资源成本 + 平台服务费 ¥0.20</div>
+    <div class="pay-order">订单号：<b id="gridPayOrder">创建中…</b></div>
+    <img src="/wechat-pay.png" alt="微信收款码">
+    <div class="pay-note">付款后点击下方按钮上传付款截图，管理员核对到账即开通本次生成。</div>
+    <div class="work-actions" style="justify-content:center">
+      <input type="file" id="gridPayShot" accept="image/png,image/jpeg,image/webp" style="display:none">
+      <button type="button" class="primary" id="btnGridPayUpload" disabled>已付款，上传截图</button>
+    </div>
+    <div class="pay-status" id="gridPayStatus"></div>
     <div class="btns"><button type="button" id="btnGridPayClose">暂不生成</button></div>
   </div>
 </div>
@@ -559,12 +565,32 @@ function toast(msg){
   var t = $("toast"); t.textContent = msg; t.classList.add("show");
   setTimeout(function(){ t.classList.remove("show"); }, 2600);
 }
-function showGridPayment(quote){
-  quote=quote||{};
+var gridPayRefs=0,gridPayOrderId="";
+function showGridPayment(quote,refs){
+  quote=quote||{};gridPayRefs=Math.max(0,Math.min(3,Number(refs)||0));gridPayOrderId="";
   $("gridPayTotal").textContent="¥"+Number(quote.payable_cny||0).toFixed(2);
-  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台处理服务费 ¥"+Number(quote.service_fee_cny||0.2).toFixed(2)+"。";
+  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台服务费 ¥"+Number(quote.service_fee_cny||0.2).toFixed(2);
+  $("gridPayOrder").textContent="创建中…";
+  $("gridPayStatus").textContent="";
+  var btn=$("btnGridPayUpload");btn.disabled=true;btn.textContent="已付款，上传截图";
   $("gridPayMask").style.display="flex";
+  api("/api/payment/order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reference_count:gridPayRefs})})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"订单创建失败");return j;});})
+    .then(function(j){gridPayOrderId=j.order_id;$("gridPayOrder").textContent=j.order_id;btn.disabled=false;})
+    .catch(function(e){$("gridPayOrder").textContent="创建失败";$("gridPayStatus").textContent=e.message||"订单创建失败，请稍后重试";});
 }
+$("btnGridPayUpload").onclick=function(){ if(!gridPayOrderId){toast("订单未就绪，请稍候");return;} $("gridPayShot").click(); };
+$("gridPayShot").onchange=function(){
+  var file=this.files&&this.files[0];this.value="";
+  if(!file||!gridPayOrderId)return;
+  var btn=$("btnGridPayUpload");btn.disabled=true;btn.textContent="上传中…";
+  var fd=new FormData();fd.append("order_id",gridPayOrderId);fd.append("screenshot",file);
+  api("/api/payment/proof",{method:"POST",body:fd})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"上传失败");return j;});})
+    .then(function(j){$("gridPayStatus").textContent=j.message||"已提交，等待管理员确认开通";toast("付款截图已提交");})
+    .catch(function(e){$("gridPayStatus").textContent=e.message||"上传失败，请重试";})
+    .finally(function(){btn.disabled=false;btn.textContent="已付款，上传截图";});
+};
 $("btnGridPayClose").onclick=function(){ $("gridPayMask").style.display="none"; };
 $("gridPayMask").onclick=function(e){ if(e.target===this)this.style.display="none"; };
 function showErr(msg, canRetry){
@@ -1395,13 +1421,13 @@ function renderStoryboard(rows){
     api("/api/creative/storyboard-grid/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reference_count:Math.min(3,refs)})})
       .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"额度核算失败");return j;});})
       .then(function(quote){
-        if(!quote.allowed){showGridPayment(quote);throw {paymentRequired:true};}
+        if(!quote.allowed){showGridPayment(quote,refs);throw {paymentRequired:true};}
         var message="本次预计使用体验额度 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+"，生成后预计剩余 ¥"+Math.max(0,Number(quote.remaining_cny||0)-Number(quote.model_cost_cny||0)).toFixed(2)+"。是否继续？";
         if(!confirm(message))throw {cancelled:true};
         button.textContent="九宫格生成中…";
         return api("/api/creative/storyboard-grid",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({storyboard:board,assets:creativeWorkspace.assets})});
       })
-      .then(function(r){return r.json().then(function(j){if(!r.ok){if(r.status===402&&j.detail){showGridPayment(j.detail);throw {paymentRequired:true};}throw new Error(j.detail||"九宫格生成失败");}return j;});})
+      .then(function(r){return r.json().then(function(j){if(!r.ok){if(r.status===402&&j.detail){showGridPayment(j.detail,refs);throw {paymentRequired:true};}throw new Error(j.detail||"九宫格生成失败");}return j;});})
       .then(function(j){board.generated_grid_url=j.image_url;renderStoryboard(creativeWorkspace.storyboard);toast("二创九宫格已生成");})
       .catch(function(e){button.disabled=false;button.textContent="生成本组二创九宫格";if(!e.paymentRequired&&!e.cancelled)toast(e.message||"九宫格生成失败，分镜规划已保留");});
   };});

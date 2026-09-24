@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VideoInsight · 付款审核</title>
+<style>
+  :root{--blue:#5B5CE2;--blue-d:#3537A6;--text:#172033;--muted:#687386;--line:#E5E9F2;--bg:#F5F7FB;--teal-d:#087569;--teal-l:#E8FAF7;--red:#A32D2D;--red-l:#FCEBEB}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.65;padding:28px 16px}
+  main{max-width:860px;margin:0 auto}
+  h1{font-size:20px;margin-bottom:4px}.sub{font-size:13px;color:var(--muted);margin-bottom:18px}
+  .login{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;max-width:420px;margin:0 auto}
+  .login input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font:inherit;margin:10px 0}
+  .login button{width:100%;padding:10px;border:0;border-radius:10px;background:var(--blue);color:#fff;font-weight:700;cursor:pointer}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+  .head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+  .oid{font-family:ui-monospace,Consolas,monospace;font-weight:800;color:var(--blue-d)}
+  .amount{font-size:18px;font-weight:800}
+  .meta{font-size:12px;color:var(--muted);margin-top:2px}
+  .status{padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700}
+  .s-pending,.s-reviewing{background:#FAEEDA;color:#854F0B}.s-approved{background:var(--teal-l);color:var(--teal-d)}.s-rejected{background:var(--red-l);color:var(--red)}
+  .actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .actions button{padding:8px 14px;border-radius:9px;border:1px solid var(--line);background:#fff;cursor:pointer;font:inherit}
+  .actions .ok{background:var(--teal-d);border-color:var(--teal-d);color:#fff}
+  .actions .no{background:#fff;border-color:#d85b5b;color:var(--red)}
+  .proof{margin-top:10px;display:none;max-width:320px;border:1px solid var(--line);border-radius:10px}
+  .empty{color:var(--muted);text-align:center;padding:30px}
+  #msg{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:9px 20px;border-radius:99px;font-size:14px;opacity:0;transition:.3s;pointer-events:none}
+  #msg.show{opacity:.95}
+</style>
+</head>
+<body>
+<main>
+  <h1>九宫格付款审核</h1>
+  <div class="sub">仅站长使用：核对截图金额与订单一致后批准，批准即给对应用户开通 1 次生成。</div>
+  <div class="login" id="login">
+    <b>输入审核口令</b>
+    <input type="password" id="token" placeholder="VI_PAYMENT_ADMIN_TOKEN">
+    <button onclick="loadOrders()">进入</button>
+  </div>
+  <div id="list" style="display:none"></div>
+</main>
+<div id="msg"></div>
+<script>
+var TOKEN="";
+function toast(t){var m=document.getElementById("msg");m.textContent=t;m.classList.add("show");setTimeout(function(){m.classList.remove("show")},2400)}
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function loadOrders(){
+  TOKEN=document.getElementById("token").value.trim();
+  if(!TOKEN){toast("请输入口令");return}
+  fetch("/api/payment/orders?token="+encodeURIComponent(TOKEN))
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"加载失败");return j})})
+    .then(function(j){
+      document.getElementById("login").style.display="none";
+      var list=document.getElementById("list");list.style.display="block";
+      var orders=j.orders||[];
+      list.innerHTML=orders.length?orders.map(function(o){
+        var proofBtn=o.proof?'<button onclick="toggleProof(\''+o.order_id+'\')">查看截图</button>':'<span class="meta">未上传截图</span>';
+        var act=(o.status==="pending"||o.status==="reviewing")?
+          '<button class="ok" onclick="review(\''+o.order_id+'\',\'approve\')">核对无误，开通</button>'+
+          '<button class="no" onclick="review(\''+o.order_id+'\',\'reject\')">拒绝</button>':"";
+        return '<div class="card"><div class="head"><div><span class="oid">'+esc(o.order_id)+'</span>'+
+          ' <span class="status s-'+esc(o.status)+'">'+esc(o.status)+'</span></div>'+
+          '<div class="amount">¥'+Number(o.amount_cny||0).toFixed(2)+'</div></div>'+
+          '<div class="meta">创建：'+esc(o.created||"")+(o.reviewed?' · 审核：'+esc(o.reviewed):"")+'</div>'+
+          '<div class="actions">'+proofBtn+act+'</div>'+
+          '<img class="proof" id="proof-'+esc(o.order_id)+'" alt="付款截图"></div>'
+      }).join(""):'<div class="card empty">还没有付款订单</div>';
+    })
+    .catch(function(e){toast(e.message||"口令错误或加载失败")})
+}
+function toggleProof(id){
+  var img=document.getElementById("proof-"+id);
+  if(img.style.display==="block"){img.style.display="none";return}
+  img.src="/api/payment/proof/"+id+"?token="+encodeURIComponent(TOKEN);
+  img.style.display="block";
+}
+function review(id,action){
+  if(action==="approve"&&!confirm("确认截图金额与订单一致？批准后该用户获得 1 次生成额度。"))return;
+  fetch("/api/payment/review",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({token:TOKEN,order_id:id,action:action})})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"操作失败");return j})})
+    .then(function(){toast(action==="approve"?"已开通":"已拒绝");loadOrders()})
+    .catch(function(e){toast(e.message||"操作失败")})
+}
+document.getElementById("token").addEventListener("keydown",function(e){if(e.key==="Enter")loadOrders()});
+</script>
+</body>
+</html>
