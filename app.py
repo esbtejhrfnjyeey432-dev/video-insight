@@ -804,7 +804,9 @@ def _merge_speaker_calibration(segments: list[dict], understanding: dict) -> lis
     return result
 
 
-def _validate_creative_phase(phase: str, result: dict) -> dict:
+def _validate_creative_phase(
+    phase: str, result: dict, expected_groups: int | list[int] | None = None
+) -> dict:
     """拒绝把空壳模型输出当成成功。"""
     if not isinstance(result, dict):
         raise HTTPException(502, "AI 没有返回结构化结果")
@@ -818,8 +820,30 @@ def _validate_creative_phase(phase: str, result: dict) -> dict:
         rows = result.get("storyboard") or []
         if not rows or any(not row.get("panels") or not row.get("time") for row in rows if isinstance(row, dict)):
             raise HTTPException(502, "分镜组缺少时间或画面规划，已阻止残缺结果进入下一步")
-    elif phase == "prompts" and not result.get("video_prompts"):
-        raise HTTPException(502, "视频提示词为空，已阻止残缺结果进入下一步")
+        wanted = list(range(1, int(expected_groups) + 1)) if isinstance(expected_groups, int) else []
+        actual = [int(row.get("group") or 0) for row in rows if isinstance(row, dict)]
+        if wanted and actual != wanted:
+            raise HTTPException(502, "分镜组数量不完整，已阻止残缺结果进入下一步")
+        for row in rows:
+            panels = row.get("panels") if isinstance(row, dict) else None
+            if not isinstance(panels, list) or len(panels) != 9:
+                raise HTTPException(502, "每个二创九宫格必须完整包含 9 个画面")
+            if any(not isinstance(panel, dict) or not str(panel.get("visual") or "").strip()
+                   for panel in panels):
+                raise HTTPException(502, "九宫格存在空画面，已阻止半成品进入下一步")
+            for index, panel in enumerate(panels, 1):
+                panel["panel"] = index
+    elif phase == "prompts":
+        rows = result.get("video_prompts") or []
+        if not rows or any(not str(row.get("prompt") or "").strip()
+                           for row in rows if isinstance(row, dict)):
+            raise HTTPException(502, "视频提示词为空，已阻止残缺结果进入下一步")
+        wanted = ({int(x) for x in expected_groups}
+                  if isinstance(expected_groups, list) else set())
+        covered = {int(x) for row in rows if isinstance(row, dict)
+                   for x in (row.get("source_groups") or []) if str(x).isdigit()}
+        if wanted and not wanted.issubset(covered):
+            raise HTTPException(502, "视频提示词未覆盖全部分镜组，已阻止残缺结果进入下一步")
     return result
 
 
@@ -1125,7 +1149,7 @@ def call_qwen_text_json(prompt: str, cfg: dict, temperature: float = 0.2,
         "model": AGENT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
-        "max_tokens": max(1024, min(6144, int(max_tokens))),
+        "max_tokens": max(1024, min(8192, int(max_tokens))),
         "enable_thinking": False,
         "response_format": {"type": "json_object"},
     }
@@ -1492,6 +1516,12 @@ async def creative_workbench(
         "reference_script": str(payload.get("reference_script") or "")[:6000],
         "understanding": (payload.get("deconstruction") or {}).get("understanding") or {},
     }
+    # 分镜组数上限 4：短剧二创通常拆 2~4 个高潮段落即可。
+    # 组数过多时，每组 9 格的输出总量会超出模型单次上限导致 JSON 截断失败，
+    # 反而回退成残缺结果。这里在「组数合理」与「输出完整」之间取平衡。
+    expected_storyboard_groups = max(
+        1, min(4, (context["target_total_seconds"] + context["target_duration"] - 1)
+               // context["target_duration"]))
     asset_images = [item.get("image", "") for item in (payload.get("assets") or [])
                     if isinstance(item, dict) and not item.get("hidden")]
     # 原片关键帧让模型真正看见镜头内容；均匀限量，避免一次请求过大。
@@ -1512,7 +1542,7 @@ async def creative_workbench(
     if phase == "script":
         instruction = """你是短剧情裂变编剧。以目标总时长重新规划剧情，不照抄原片；根据用户选择决定是否换产品、场景、人物或冲突模式，并可参考成熟脚本的结构但不得复制原文。说话人必须继承已校准人物；待确认台词不得擅自归属。完整脚本要写清剧情单元承接、出场人物、人物关系、服装、道具、情绪动作、产品植入方式。另生成一份与新视频匹配的通用发布配文，不指定小红书、抖音等平台。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"identity\":\"\",\"personality\":\"\",\"appearance\":\"\",\"wardrobe_by_unit\":[{\"unit\":\"\",\"wardrobe\":\"\"}]}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\",\"placement_strategy\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"target_seconds\":120,\"story_units\":[{\"unit\":1,\"purpose\":\"\",\"transition\":\"\",\"characters\":[],\"wardrobe\":\"\",\"props\":[],\"product_placement\":\"\"}],\"shots\":[{\"shot\":1,\"unit\":1,\"start\":0,\"end\":10,\"speaker\":\"\",\"emotion\":\"\",\"action\":\"\",\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]},\"post_copy\":{\"titles\":[\"标题1\",\"标题2\",\"标题3\"],\"body\":\"与新视频内容一致的简洁发布配文\",\"tags\":[\"标签\"]}}。"""
     elif phase == "storyboard":
-        instruction = """你是连续分镜导演。按目标单段时长把完整脚本拆成连续分镜组；每组只为脚本中实际存在的镜头提供画面规划，总数不超过9格，包含景别变化、前后连续动作、实际出场人物、人物服装、场景和产品素材引用。不要补写重复镜头，不要声称已经生成图片。只输出 JSON：{\"storyboard\":[{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}],\"grid_prompt\":\"九宫格生图提示词\",\"negative_prompt\":\"\"}]}。"""
+        instruction = f"""你是连续分镜导演。把完整脚本严格拆成 {expected_storyboard_groups} 个连续分镜组，组号必须从 1 连续到 {expected_storyboard_groups}。每一组必须恰好规划 9 个连续画面（不是最多9格），用动作过程、反应、景别和机位变化把该时间段的真实剧情细分为九个视觉节拍；不得添加脚本没有的新人物、新产品、新事件或重复凑数。每格都必须有可拍摄的 visual，并包含景别变化、前后连续动作、实际出场人物、服装、场景和产品素材引用。不要声称已经生成图片。每格 visual 控制在 15~25 字，只写可直接拍摄的画面要点，避免重复服装和背景描写。只输出 JSON：{{\"storyboard\":[{{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"可直接拍摄的具体画面\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}}],\"grid_prompt\":\"完整3×3九宫格生图提示词\",\"negative_prompt\":\"\"}}]}}。"""
     else:
         instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
     if phase == "script":
@@ -1525,7 +1555,7 @@ async def creative_workbench(
         token_limit = 2300 if context["target_total_seconds"] <= 120 else (
             3200 if context["target_total_seconds"] <= 300 else 4096)
     elif phase == "storyboard":
-        token_limit = 2600
+        token_limit = min(8192, max(4200, expected_storyboard_groups * 1200))
     else:
         token_limit = 1800
     # 第 1 步已完成原片视觉理解，后续三步只消费结构化脚本数据。
@@ -1535,14 +1565,18 @@ async def creative_workbench(
     if phase == "script":
         result = _sanitize_creative_script(result, payload.get("assets") or [])
     try:
-        final_result = _validate_creative_phase(phase, result)
+        expected = (expected_storyboard_groups if phase == "storyboard" else
+                    [int(row.get("group") or index + 1)
+                     for index, row in enumerate(context.get("storyboard") or [])
+                     if isinstance(row, dict)] if phase == "prompts" else None)
+        final_result = _validate_creative_phase(phase, result, expected)
     except HTTPException:
-        repair_prompt = prompt + "\n上一次结果字段不完整。请严格按指定 JSON 结构补全必填字段，只返回 JSON。"
+        repair_prompt = prompt + "\n上一次结果字段不完整。请重新输出完整结果：所有目标分镜组都要齐全，每个九宫格必须恰好 9 个非空画面，视频提示词必须覆盖全部来源组。只返回 JSON。"
         repaired = await asyncio.to_thread(
             call_qwen_text_json, repair_prompt, cfg, 0.2, token_limit)
         if phase == "script":
             repaired = _sanitize_creative_script(repaired, payload.get("assets") or [])
-        final_result = _validate_creative_phase(phase, repaired)
+        final_result = _validate_creative_phase(phase, repaired, expected)
     _cache_put(cache_key, final_result)
     return final_result
 
