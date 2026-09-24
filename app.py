@@ -98,7 +98,7 @@ _creative_cache: dict[str, tuple[float, dict]] = {}
 # 临时公开体验使用本机 JSON 存储；正式商业化应替换为登录账号 + 数据库 + 支付回调。
 GRID_FREE_LIMIT_CNY = max(0.0, float(os.environ.get("VI_GRID_FREE_LIMIT_CNY", "2.00")))
 GRID_DAILY_BUDGET_CNY = max(0.0, float(os.environ.get("VI_GRID_DAILY_BUDGET_CNY", "10.00")))
-GRID_SERVICE_FEE_CNY = max(0.0, float(os.environ.get("VI_GRID_SERVICE_FEE_CNY", "0.30")))
+GRID_SERVICE_FEE_CNY = max(0.0, float(os.environ.get("VI_GRID_SERVICE_FEE_CNY", "0.20")))
 GRID_USAGE_PATH = Path(os.environ.get(
     "VI_GRID_USAGE_PATH", str(Path(tempfile.gettempdir()) / "video-insight-grid-usage.json")))
 PAYMENT_PROOF_DIR = Path(os.environ.get(

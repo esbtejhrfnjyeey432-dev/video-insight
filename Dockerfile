@@ -16,7 +16,7 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=appuser:appuser app.py resolver.py ./
+COPY --chown=appuser:appuser app.py resolver.py quota_identity.py ./
 COPY --chown=appuser:appuser static ./static
 
 USER appuser
