@@ -152,7 +152,7 @@
   .shot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:12px}
   .shot-item{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}.shot-item img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#edf1f5;display:block}
   .shot-placeholder{aspect-ratio:16/9;background:#edf3f8;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:12px}
-  .shot-body{padding:9px;font-size:12px}.shot-time{color:var(--blue-d);font-weight:700}.shot-dialogue{margin-top:5px;color:#4d5965;min-height:38px}
+  .shot-body{padding:9px;font-size:12px}.shot-time{color:var(--blue-d);font-weight:700}.shot-dialogue{margin-top:5px;color:#4d5965;min-height:38px}.shot-features{margin-top:7px;padding-top:7px;border-top:1px solid var(--line);color:var(--muted);line-height:1.6}
   .contact-sheet{margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}.contact-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}.contact-sheet-head p{font-size:12px;color:var(--muted);margin-top:3px}.contact-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.contact-cell{position:relative;aspect-ratio:1/1;overflow:hidden;border-radius:7px;background:#17212b;color:#fff}.contact-cell img{width:100%;height:100%;object-fit:cover}.plan-grids{display:grid;gap:12px;margin-top:12px}.plan-grid-card{padding:12px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}.plan-grid-title{font-size:13px;font-weight:700;color:var(--blue-d);margin-bottom:8px}.plan-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.plan-cell{min-height:105px;padding:8px;border:1px solid #ccd6e1;border-radius:7px;background:#fff;font-size:11px;line-height:1.5}.plan-cell b{display:block;color:var(--blue-d);margin-bottom:3px}.plan-cell.empty{background:#f1f3f5;color:#9aa3ad;display:flex;align-items:center;justify-content:center}
   .asset-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.asset-toolbar label{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;background:#fff}.asset-toolbar input{display:none}
   .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:10px 0}.asset-card{border:1px solid var(--line);border-radius:9px;padding:8px;background:#fff}.asset-card.hidden{opacity:.45}.asset-card img{width:100%;height:105px;object-fit:cover;border-radius:6px;background:#edf1f5}.asset-card input{width:100%;border:0;border-bottom:1px solid var(--line);padding:5px 2px;font:inherit;font-size:12px}.asset-actions{display:flex;gap:5px;margin-top:6px}.asset-actions button{padding:4px 7px;font-size:11px;flex:1}
@@ -301,7 +301,7 @@
         <div class="work-output" id="understandingOutput"></div>
         <div class="shot-grid" id="deconstructShots"></div>
         <div class="contact-sheet" id="contactSheetPanel" style="display:none">
-          <div class="contact-sheet-head"><div><b>原片镜头参考</b><p>这里仅展示上传视频的代表画面，不是更换人物和场景后的二创九宫格；二创九宫格在第 04 步按新脚本生成。</p></div><button id="btnDownloadContactSheet">下载原片参考图</button></div>
+          <div class="contact-sheet-head"><div><b>原片镜头参考</b><p>用于观察原片的景别变化、构图、人物站位、动作衔接、色调与产品露出；不是更换人物和场景后的二创九宫格。</p></div><button id="btnDownloadContactSheet">下载原片参考图</button></div>
           <div class="contact-grid" id="contactSheetGrid"></div>
         </div>
       </div>
@@ -1022,14 +1022,17 @@ $("btnDownloadContactSheet").onclick=async function(){
 };
 function renderDeconstruction(data){
   var shots = data && data.shots || [];
+  var u=data.understanding||{},shotAnalysis=u.shot_analysis||[];
   $("deconstructShots").innerHTML = shots.map(function(shot){
+    var meta=shotAnalysis.find(function(x){return Number(x.shot)===Number(shot.shot);})||{};
     var visual=shot.image?'<img src="'+esc(shot.image)+'" alt="镜头 '+esc(shot.shot)+'">':'<div class="shot-placeholder">镜头画面待补充</div>';
     return '<div class="shot-item">'+visual+
       '<div class="shot-body"><div class="shot-time">镜头 '+esc(shot.shot)+' · '+secondsLabel(shot.start)+'–'+secondsLabel(shot.end)+'</div>'+
-      '<div class="shot-dialogue">'+esc(shot.dialogue || "（此镜头未识别到台词）")+'</div></div></div>';
+      '<div class="shot-dialogue">'+esc(shot.dialogue || "（此镜头未识别到台词）")+'</div>'+
+      '<div class="shot-features"><b>景别：</b>'+esc(meta.shot_size||"待识别")+'<br><b>构图：</b>'+esc(meta.composition||"待识别")+'<br><b>动作：</b>'+esc(meta.action||"待识别")+'<br><b>参考价值：</b>'+esc(meta.visual_value||"待识别")+'</div></div></div>';
   }).join("");
   renderContactSheet(data);
-  var u=data.understanding||{},cal=u.speaker_calibration||[],unknown=cal.filter(function(x){return x.speaker==="待确认"||Number(x.confidence)<.6;}).length;
+  var cal=u.speaker_calibration||[],unknown=cal.filter(function(x){return x.speaker==="待确认"||Number(x.confidence)<.6;}).length;
   var people=(u.characters||[]).map(function(x){return '<li><b>'+esc(x.name||x.id||"人物")+'</b> · '+esc(x.identity||"")+' · '+esc(x.personality||"")+' · '+esc(x.appearance||"")+'</li>';}).join("");
   var relations=(u.relationships||[]).map(function(x){return '<li>'+esc(x.from||"")+' → '+esc(x.to||"")+'：'+esc(x.relationship||"")+'；变化：'+esc(x.changes||"无")+'</li>';}).join("");
   var scenes=(u.scenes||[]).map(function(x){return '<li>'+esc(x.time_range||"")+' · '+esc(x.name||"场景")+' · 道具：'+esc((x.props||[]).join("、"))+'</li>';}).join("");

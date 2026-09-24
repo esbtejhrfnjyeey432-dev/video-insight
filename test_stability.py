@@ -31,7 +31,22 @@ class StabilityTests(unittest.TestCase):
         )
         self.assertEqual(result["characters"][0]["name"], "小知")
         self.assertEqual(result["story_units"][0]["summary"], "提出问题")
+        self.assertTrue(result["story_units"][0]["emotion_changes"])
+        self.assertTrue(result["story_units"][0]["transition"])
         self.assertEqual(result["speaker_calibration"][1]["speaker"], "待确认")
+
+    def test_creative_understanding_repairs_missing_emotion_transition_and_shot_size(self):
+        incomplete = {"story_units": [{"unit": 1, "emotion_changes": [], "transition": ""}]}
+        complete = {"story_units": [{"unit": 1, "emotion_changes": [{"from": "平静", "to": "紧张"}],
+                                     "transition": "冲突升级"}],
+                    "shot_analysis": [{"shot": 1, "shot_size": "近景", "composition": "居中",
+                                       "action": "抬头", "visual_value": "强化反应"}]}
+        with mock.patch("app._creative_asset_prompt", side_effect=[incomplete, complete]) as generate:
+            result = app._creative_understanding(
+                [{"shot": 1, "start": 0, "end": 3, "image": "data:image/jpeg;base64,QQ=="}],
+                [], {"api_key": "test"}, {})
+        self.assertEqual(generate.call_count, 2)
+        self.assertEqual(result["shot_analysis"][0]["shot_size"], "近景")
 
     def test_creative_json_mode_retries_malformed_output(self):
         malformed = mock.Mock(status_code=200)
