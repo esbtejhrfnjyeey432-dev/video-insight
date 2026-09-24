@@ -512,6 +512,8 @@ def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 30
             except (TypeError, ValueError):
                 continue
             speaker = str(sentence.get("speaker_id") or sentence.get("speaker") or "").strip()
+            if speaker.isdigit():
+                speaker = "人物" + str(int(speaker) + 1)
             segments.append({"start_ms": begin, "end_ms": end, "text": text,
                              "speaker": speaker or "待校准",
                              "speaker_source": "asr" if speaker else "unknown"})
@@ -552,10 +554,11 @@ def _parse_srt(content: bytes) -> list[dict]:
     return segments[:3000]
 
 
-def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict) -> dict:
+def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict,
+                            base_analysis: dict | None = None) -> dict:
     compact = [{k: item.get(k) for k in ("start_ms", "end_ms", "speaker", "text")}
                for item in transcript[:1200]]
-    prompt = """你是短剧情原片分析导演。结合按时间排列的关键帧和字幕，完成可核验的结构化理解。不得凭声音猜人物身份；说话人证据不足时 speaker 写“待确认”并降低 confidence。只输出 JSON：
+    prompt = """你是短剧情原片分析导演。结合按时间排列的关键帧、字幕和已有基础分析，重新完成可核验的结构化理解，不得只复制基础分析。逐条校准说话人：SRT/ASR明确人物、清晰可见的口型对应或连续对话关系可以作为证据；直接证据充分时 confidence 应为0.90到0.99，只有弱上下文时为0.60到0.89，无法判断才写“待确认”且低于0.60。必须结合画面和台词填写前三秒、核心冲突、节奏和有效原因，不得在已有画面/台词证据时返回空字符串。只输出 JSON：
 {"speaker_calibration":[{"start_ms":0,"end_ms":1000,"speaker":"人物A/旁白/待确认","text":"","confidence":0.0,"evidence":"画面口型/SRT标注/仅上下文推断"}],
 "characters":[{"id":"char-1","name":"人物A","identity":"","personality":"","appearance":"","wardrobe_by_unit":[{"unit":"剧情单元1","wardrobe":""}]}],
 "relationships":[{"from":"char-1","to":"char-2","relationship":"","changes":""}],
@@ -564,7 +567,7 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
 "product_placements":[{"time_range":"","product":"","method":"","plot_function":""}],
 "appeal_logic":{"first_3_seconds":"","conflict":"","payoffs":[],"pace":"","why_it_works":""},
 "review_required":["需要人工确认的说话人或事实"]}。
-字幕数据：""" + json.dumps(compact, ensure_ascii=False)[:48000]
+已有基础分析：""" + json.dumps(_analysis_for_agent(base_analysis or {}), ensure_ascii=False)[:12000] + "\n字幕数据：" + json.dumps(compact, ensure_ascii=False)[:36000]
     return _creative_asset_prompt(prompt, [item.get("image", "") for item in shots[::3]][:12], cfg)
 
 
@@ -605,6 +608,13 @@ def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict
     cards = cards if isinstance(cards, list) else []
     appeal_text = "；".join(str(x.get("content") or x.get("text") or x.get("title") or "")
                             for x in cards[:6] if isinstance(x, dict)).strip("；")
+    key_info = analysis.get("key_info") if isinstance(analysis, dict) else []
+    key_info = key_info if isinstance(key_info, list) else []
+    first_hook = (str(units[0].get("summary") or units[0].get("time_range") or "")
+                  if units else (str(key_info[0]) if key_info else ""))
+    conflict = str(key_info[1] if len(key_info) > 1 else analysis.get("overall_summary") or "")[:500]
+    pace = (f"根据 {len(units)} 个章节节点推断内容推进节奏；需结合原片镜头复核"
+            if units else "")
     return {
         "speaker_calibration": calibration,
         "characters": [{"id": f"char-{i + 1}", "name": name, "identity": "",
@@ -612,7 +622,7 @@ def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict
                        for i, name in enumerate(names)],
         "relationships": [], "scenes": scenes, "story_units": units,
         "product_placements": [],
-        "appeal_logic": {"first_3_seconds": "", "conflict": "", "payoffs": [], "pace": "",
+        "appeal_logic": {"first_3_seconds": first_hook, "conflict": conflict, "payoffs": [], "pace": pace,
                          "why_it_works": appeal_text or str(analysis.get("overall_summary") or "")[:500]},
         "review_required": [] if names else ["说话人需要人工确认"],
     }
@@ -660,6 +670,34 @@ def _validate_creative_phase(phase: str, result: dict) -> dict:
     elif phase == "prompts" and not result.get("video_prompts"):
         raise HTTPException(502, "视频提示词为空，已阻止残缺结果进入下一步")
     return result
+
+
+def _apply_explicit_speaker_evidence(segments: list[dict], understanding: dict) -> dict:
+    """SRT/ASR 已明确给出说话人时，以原始证据覆盖模型猜测和零置信度。"""
+    if not isinstance(understanding, dict):
+        understanding = {}
+    calibrated = [dict(x) for x in (understanding.get("speaker_calibration") or [])
+                  if isinstance(x, dict)]
+    for segment in segments:
+        speaker = str(segment.get("speaker") or "").strip()
+        source = str(segment.get("speaker_source") or "unknown")
+        if speaker in {"", "待确认", "待校准", "unknown"} or source not in {"srt", "asr"}:
+            continue
+        best = None
+        for item in calibrated:
+            overlap = min(int(segment.get("end_ms") or 0), int(item.get("end_ms") or 0)) - max(int(segment.get("start_ms") or 0), int(item.get("start_ms") or 0))
+            if overlap > 0 and (best is None or overlap > best[0]):
+                best = (overlap, item)
+        target = best[1] if best else {"start_ms": int(segment.get("start_ms") or 0),
+                                      "end_ms": int(segment.get("end_ms") or 0),
+                                      "text": str(segment.get("text") or "")}
+        if not best:
+            calibrated.append(target)
+        target.update({"speaker": speaker, "confidence": 0.98 if source == "srt" else 0.92,
+                       "evidence": "SRT明确标注" if source == "srt" else "语音模型声纹分离"})
+    calibrated.sort(key=lambda x: (int(x.get("start_ms") or 0), int(x.get("end_ms") or 0)))
+    understanding["speaker_calibration"] = calibrated
+    return understanding
 
 
 def _sanitize_creative_script(result: dict, assets: list[dict]) -> dict:
@@ -1202,14 +1240,18 @@ async def creative_deconstruct(
         understanding_warning = ""
         try:
             base_analysis = json.loads(analysis) if analysis and len(analysis) <= 500_000 else {}
-            if isinstance(base_analysis, dict) and base_analysis:
-                understanding = _understanding_from_analysis(base_analysis, segments)
-            else:
-                understanding = await asyncio.to_thread(_creative_understanding, scenes, segments, cfg)
+            understanding = await asyncio.to_thread(
+                _creative_understanding, scenes, segments, cfg,
+                base_analysis if isinstance(base_analysis, dict) else {})
+            understanding = _apply_explicit_speaker_evidence(segments, understanding)
             segments = _merge_speaker_calibration(segments, understanding)
         except Exception as exc:
             logger.warning("creative_understanding_fallback reason=%s", exc)
-            understanding_warning = "深层剧情理解暂未完成，镜头和台词仍已保留。"
+            understanding = _apply_explicit_speaker_evidence(
+                segments, _understanding_from_analysis(
+                    base_analysis if isinstance(base_analysis, dict) else {}, segments))
+            segments = _merge_speaker_calibration(segments, understanding)
+            understanding_warning = "深层剧情理解暂未完成，已保留可核验的字幕人物和基础结构。"
         return {
             "duration": round(duration, 2), "shots": scenes,
             "transcript": segments, "transcript_text": " ".join(x.get("text", "") for x in segments),

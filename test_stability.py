@@ -58,6 +58,17 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(result["role_profiles"], [])
         self.assertEqual(result["product_profiles"], [])
 
+    def test_explicit_speaker_evidence_is_not_overwritten_by_zero_confidence(self):
+        segments = [{"start_ms": 1000, "end_ms": 2500, "text": "你好",
+                     "speaker": "人物甲", "speaker_source": "asr"}]
+        understanding = {"speaker_calibration": [{"start_ms": 1000, "end_ms": 2500,
+                                                    "speaker": "待确认", "confidence": 0.0}]}
+        result = app._apply_explicit_speaker_evidence(segments, understanding)
+        row = result["speaker_calibration"][0]
+        self.assertEqual(row["speaker"], "人物甲")
+        self.assertGreaterEqual(row["confidence"], 0.9)
+        self.assertEqual(row["evidence"], "语音模型声纹分离")
+
     def test_script_cannot_reference_unprovided_products_or_assets(self):
         result = app._sanitize_creative_script({
             "product_profiles": [{"asset_id": "made-up", "name": "虚构产品"}],
