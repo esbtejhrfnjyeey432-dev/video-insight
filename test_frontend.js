@@ -59,9 +59,18 @@ assert(context.reportHtml(sample).includes("语音内容摘要"),
   "Word/PDF export missed speech summary");
 
 for (const id of ["historyCard", "btnClearHistory", "videoPlayer", "btnEdit", "btnWord", "btnPdf",
-  "subtitleFile", "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript"]) {
+  "subtitleFile", "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript",
+  "capabilityHub", "toolIntent", "btnClearIntent"]) {
   assert(html.includes('id="' + id + '"'), "Missing UI control: " + id);
 }
+const realTools = [...html.matchAll(/data-tool="([^"]+)"/g)].map((match) => match[1]);
+assert(JSON.stringify(realTools) === JSON.stringify(["extract","dialogue","hooks","scripts","storyboard","course"]),
+  "Capability hub must only expose the six connected workflows");
+for (const unsupported of ["voice-clone", "ocr", "cover-generator", "batch-account"]) {
+  assert(!realTools.includes(unsupported), "Unsupported empty tool was exposed: " + unsupported);
+}
+assert(html.includes("function activateToolIntent"), "Capability cards must route to a real workflow");
+assert(html.includes("continueToolIntent();"), "Selected capability must continue after analysis");
 for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {
   assert(!html.includes('id="' + id + '"'), "Removed variation toggle is still visible: " + id);
 }
