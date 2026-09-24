@@ -74,6 +74,47 @@ _agent_slots = asyncio.Semaphore(MAX_AGENT_CONCURRENT)
 _asr_media: dict[str, tuple[str, float]] = {}
 _asr_media_lock = threading.Lock()
 
+# 分析结果缓存：相同视频（文件/链接/帧）在 TTL 内重复解析直接复用上次结果，
+# 秒回且不消耗 AI 额度——对「失败后重试」和「同一视频反复点」场景体验提升最大。
+ANALYSIS_CACHE_TTL = int(os.environ.get("VI_CACHE_TTL", "1800"))  # 默认 30 分钟
+ANALYSIS_CACHE_MAX = int(os.environ.get("VI_CACHE_MAX", "128"))    # 最多缓存条数
+_analysis_cache: dict[str, tuple[float, dict]] = {}  # key -> (expire_ts, result)
+_analysis_cache_lock = threading.Lock()
+
+
+def _cache_get(key: str) -> dict | None:
+    now = time.monotonic()
+    with _analysis_cache_lock:
+        entry = _analysis_cache.get(key)
+        if not entry:
+            return None
+        expire_ts, result = entry
+        if now >= expire_ts:
+            _analysis_cache.pop(key, None)
+            return None
+        # 命中后刷新过期时间，活跃条目不会被反复淘汰
+        _analysis_cache[key] = (now + ANALYSIS_CACHE_TTL, result)
+        return result
+
+
+def _cache_put(key: str, result: dict) -> None:
+    with _analysis_cache_lock:
+        if len(_analysis_cache) >= ANALYSIS_CACHE_MAX:
+            # 简单逐出：丢弃最接近过期的一条，避免缓存无限膨胀撑爆免费层内存
+            oldest_key = min(_analysis_cache, key=lambda k: _analysis_cache[k][0])
+            _analysis_cache.pop(oldest_key, None)
+        _analysis_cache[key] = (time.monotonic() + ANALYSIS_CACHE_TTL, result)
+
+
+def _with_cache_meta(result: dict, **overrides) -> dict:
+    """命中缓存时复制结果并标记来源，避免把 mutable 元数据写回缓存。"""
+    out = dict(result)
+    meta = dict(out.get("_meta") or {})
+    meta["cached"] = True
+    meta.update(overrides)
+    out["_meta"] = meta
+    return out
+
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name, "").strip().lower()
     if not raw:
@@ -115,12 +156,12 @@ PROMPT = """你是专业的视频内容分析师。我会给你一段视频中�
 语音原则：只有提供了语音转写时，才可引用口头内容；转写可能有错别字，应结合上下文谨慎归纳。未提供转写时，不得臆测画面之外的语音内容。
 外文内容：如果关键帧或语音转写中包含英文或其他语言，请识别其语言，并将能够确认的标题、字幕和关键信息准确翻译为中文后输出。
 1. 内容理解：判断视频主题、类型（教育培训/知识科普/新闻资讯/娱乐/产品演示/VLOG/其他）与标签；
-2. 关键信息提取（核心任务）：逐条提取视频中的关键信息，共 8-12 条，按重要性从高到低排列。覆盖：主题、人物或主体、事件、关键数据、方法步骤、重要结论等，每条一句话，尽量带画面中的具体细节，让没看过视频的人读完就能掌握全部要点；
+2. 关键信息提取（核心任务）：逐条提取视频中的关键信息，共 6-8 条，按重要性从高到低排列。覆盖：主题、人物或主体、事件、关键数据、方法步骤、重要结论等，每条一句话，尽量带画面中的具体细节，让没看过视频的人读完就能掌握全部要点；
 3. 章节时间轴：按关键帧先后顺序估算时间点划分章节；
 4. 如果属于教学/知识类视频，提炼教学观点：核心教学主张、讲解思路、适合人群；
-5. Remix 衍生创作：生成 3-5 张观点卡片（一句话观点+简短说明）、1 个约 60 秒的短视频口播脚本、3 条金句摘录；
+5. Remix 衍生创作：生成 3 张观点卡片（一句话观点+简短说明）、1 个约 60 秒的短视频口播脚本、3 条金句摘录；
 6. 语音内容摘要：提供了语音转写时，用 3-6 句话概括口头讲述的重点；未提供时返回空字符串；
-7. 总体总结：综合全部内容写一段 150-250 字的总结，概括视频讲了什么、整体结构如何、核心结论与价值、适合什么人看，作为整份报告的收尾。
+7. 总体总结：综合全部内容写一段 100-150 字的总结，概括视频讲了什么、整体结构如何、核心结论与价值、适合什么人看，作为整份报告的收尾。
 
 只输出严格的 JSON，不要输出任何其他文字，不要用 markdown 代码块包裹。JSON 结构：
 {"title":"视频标题","category":"视频类型","tags":["标签"],
@@ -315,9 +356,8 @@ def _extract_frames_batch(path: str, tmpdir: str, duration: float):
 
 
 def _extract_frames_serial(path: str, tmpdir: str, duration: float):
-    """逐帧抽取（兜底方案）：依赖 -ss 快速 seek，兼容性最好。"""
-    files = []
-    for i in range(MAX_FRAMES):
+    """逐帧抽取（兜底方案）：依赖 -ss 快速 seek，兼容性最好；并发执行避免逐帧冷启动。"""
+    def grab(i: int):
         t = duration * (i + 0.5) / MAX_FRAMES
         out = os.path.join(tmpdir, f"f{i}.jpg")
         cmd = [
@@ -326,8 +366,13 @@ def _extract_frames_serial(path: str, tmpdir: str, duration: float):
             "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "5", out,
         ]
         if _run_ffmpeg(cmd, timeout=60) and os.path.exists(out) and os.path.getsize(out) > 1000:
-            files.append(out)
-    return files
+            return out
+        return None
+
+    # 免费层内存有限，最多 3 路并发抽帧，兼顾速度与稳定性
+    workers = min(3, MAX_FRAMES)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        return [f for f in pool.map(grab, range(MAX_FRAMES)) if f]
 
 
 def extract_frames(path: str):
@@ -385,6 +430,61 @@ def extract_remote_frames(stream_url: str, duration: float, headers: dict | None
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _try_json_load(text: str):
+    """依次尝试标准解析与 raw_decode（容忍尾部多余文本），失败返回 None。"""
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text)
+        return obj
+    except Exception:
+        return None
+
+
+def _balance_json(text: str) -> str:
+    """补齐末尾缺失的闭合括号，修复被截断的 JSON 输出。"""
+    stack: list[str] = []
+    pairs = {"]": "[", "}": "{"}
+    closing = {"[": "]", "{": "}"}
+    in_str = False
+    escape = False
+    for ch in text:
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack and stack[-1] == pairs[ch]:
+                stack.pop()
+    return text + "".join(closing[o] for o in reversed(stack))
+
+
+def _repair_truncated_json(text: str) -> dict:
+    """尽力修复不完整/带尾逗号的 JSON，降低大模型偶发输出截断导致的失败率。"""
+    obj = _try_json_load(text)
+    if obj is not None:
+        return obj
+    cleaned = re.sub(r",\s*([}\]])", r"\1", text)  # 去尾逗号
+    obj = _try_json_load(cleaned)
+    if obj is not None:
+        return obj
+    obj = _try_json_load(_balance_json(cleaned))   # 补齐截断括号
+    if obj is not None:
+        return obj
+    raise HTTPException(500, "JSON 解析失败，请重试一次")
+
+
 def parse_model_json(text: str) -> dict:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -393,7 +493,9 @@ def parse_model_json(text: str) -> dict:
     if s == -1 or e == -1:
         raise HTTPException(500, "模型未返回有效的 JSON 结果")
     try:
-        return json.loads(text[s:e + 1])
+        return _repair_truncated_json(text[s:e + 1])
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(500, "JSON 解析失败，请重试一次")
 
@@ -431,7 +533,7 @@ def _compact_transcript(text: str, limit: int = 40000) -> str:
     return "\n……\n".join(text[start:start + width] for start in starts)
 
 
-def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 300) -> dict:
+def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 150) -> dict:
     """调用百炼文件转写，保留句级时间戳供视频拆解使用。"""
     if not media_url or not cfg.get("api_key") or not ASR_MODEL:
         return {"text": "", "segments": []}
@@ -477,7 +579,7 @@ def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 30
             break
         if status in {"FAILED", "CANCELED", "UNKNOWN"}:
             raise RuntimeError(str(output.get("message") or "语音转写任务未成功"))
-        time.sleep(2)
+        time.sleep(1.5)
     else:
         raise RuntimeError("语音转写等待超时")
 
@@ -524,7 +626,7 @@ def transcribe_remote_audio_details(media_url: str, cfg: dict, timeout: int = 30
     }
 
 
-def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 300) -> str:
+def transcribe_remote_audio(media_url: str, cfg: dict, timeout: int = 150) -> str:
     """兼容原有分析流程，仅返回转写正文。"""
     return transcribe_remote_audio_details(media_url, cfg, timeout).get("text", "")
 
@@ -954,7 +1056,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
         "model": model,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.3,
-        "max_tokens": 3072 if mode in {"quick", "standard"} else 4096,
+        "max_tokens": 2048 if mode in {"quick", "standard"} else 3072,
         "enable_thinking": False,
         "response_format": {"type": "json_object"},
     }
@@ -967,7 +1069,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
                     "Authorization": "Bearer " + cfg["api_key"],
                     "Content-Type": "application/json",
                 },
-                json=body, timeout=90 if mode in {"quick", "standard"} else 240,
+                json=body, timeout=75 if mode in {"quick", "standard"} else 180,
             )
         except Exception as exc:
             logger.warning("model_request_failed attempt=%s type=%s", attempt + 1,
@@ -1837,6 +1939,10 @@ async def analyze(
         raise HTTPException(400, "视频链接过长，请粘贴原始分享链接")
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key：请点右上角「设置」填写阿里百炼 API Key，或先点「演示模式」看效果")
+    # 提前归一化模式/场景，用于缓存键与命中判断
+    mode_norm, _ = _analysis_context(mode)
+    scenario_norm, _ = _scenario_context(scenario)
+    cache_key: str | None = None
     analysis_slots = await acquire_analysis_slot("link")
     tmpdir = tempfile.mkdtemp(prefix="vinsight_video_")
     try:
@@ -1850,6 +1956,7 @@ async def analyze(
                 suffix = ".mp4"
             vpath = os.path.join(tmpdir, f"upload-{uuid.uuid4().hex}{suffix}")
             total = 0
+            digest = hashlib.md5()
             with open(vpath, "wb") as f:
                 while True:
                     chunk = await file.read(1 << 20)
@@ -1858,8 +1965,20 @@ async def analyze(
                     total += len(chunk)
                     if total > MAX_VIDEO_BYTES:
                         raise HTTPException(400, "视频超过 500MB，请换一个更小的文件")
+                    digest.update(chunk)
                     f.write(chunk)
+            cache_key = ("file:" + digest.hexdigest() + ":"
+                         + mode_norm + ":" + scenario_norm)
+            cached = _cache_get(cache_key)
+            if cached is not None:
+                # 相同文件在缓存期内直接复用上次解析，省去抽帧 + 大模型推理
+                return _with_cache_meta(cached)
         elif url and url.strip():
+            cache_key = ("url:" + hashlib.md5(url.strip().encode("utf-8")).hexdigest()
+                         + ":" + mode_norm + ":" + scenario_norm)
+            cached = _cache_get(cache_key)
+            if cached is not None:
+                return _with_cache_meta(cached)
             remote_info = None
             try:
                 # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
@@ -1889,15 +2008,23 @@ async def analyze(
         transcript = ""
         speech_status = "仅画面分析"
         if url and url.strip() and remote_info is not None:
-            frames = await asyncio.to_thread(
+            # 抽帧与语音转写并行执行，避免 ASR 排队阻塞画面理解的总耗时
+            frames_task = asyncio.to_thread(
                 extract_remote_frames, stream_url, duration, media_headers)
-            try:
-                transcript = await asyncio.to_thread(
-                    transcribe_remote_audio, stream_url, cfg)
-                if transcript:
-                    speech_status = "画面 + 语音转写"
-            except Exception as exc:
-                logger.warning("asr_fallback platform=%s reason=%s", platform, exc)
+
+            async def _run_asr() -> str:
+                try:
+                    return await asyncio.to_thread(
+                        transcribe_remote_audio, stream_url, cfg)
+                except Exception as exc:
+                    logger.warning("asr_fallback platform=%s reason=%s", platform, exc)
+                    return ""
+
+            asr_task = asyncio.create_task(_run_asr())
+            frames = await frames_task
+            transcript = await asr_task
+            if transcript:
+                speech_status = "画面 + 语音转写"
         else:
             frames, duration = await asyncio.to_thread(extract_frames, vpath)
         if not frames:
@@ -1917,6 +2044,8 @@ async def analyze(
             "scenario": scenario,
             "speech": speech_status,
         }
+        if cache_key:
+            _cache_put(cache_key, analysis)
         return analysis
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -1945,6 +2074,7 @@ async def analyze_frames(
 
     encoded: list[str] = []
     total = 0
+    frame_digest = hashlib.md5()
     for frame in frames:
         raw = await frame.read()
         total += len(raw)
@@ -1953,6 +2083,7 @@ async def analyze_frames(
         content_type = (frame.content_type or "").lower()
         if content_type not in ("image/jpeg", "image/png", "image/webp"):
             raise HTTPException(400, "关键帧格式不支持")
+        frame_digest.update(raw)
         encoded.append(
             f"data:{content_type};base64," + base64.b64encode(raw).decode("ascii")
         )
@@ -1967,6 +2098,11 @@ async def analyze_frames(
         # 浏览器通常已按模式控制帧数；服务端再做一次上限保护，防止异常请求放大成本。
         picks = [round(i * (len(encoded) - 1) / (limit - 1)) for i in range(limit)]
         encoded = [encoded[i] for i in picks]
+    cache_key = ("frames:" + frame_digest.hexdigest() + ":"
+                 + mode + ":" + scenario)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return _with_cache_meta(cached)
     analysis_slots = await acquire_analysis_slot("frames")
     try:
         check_daily_usage()
@@ -1982,6 +2118,7 @@ async def analyze_frames(
             "scenario": scenario,
             "speech": "仅画面分析（原视频未上传）",
         }
+        _cache_put(cache_key, analysis)
         return analysis
     finally:
         analysis_slots.release()
