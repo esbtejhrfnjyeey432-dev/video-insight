@@ -691,14 +691,16 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
 "review_required":["需要人工确认的说话人或事实"]}。
 每个剧情单元的 emotion_changes 和 transition 均为必填；每张参考关键帧都必须在 shot_analysis 中给出景别、构图、动作和实用价值。已有基础分析：""" + json.dumps(_analysis_for_agent(base_analysis or {}), ensure_ascii=False)[:10000] + "\n镜头索引：" + json.dumps([{"shot": x.get("shot"), "start": x.get("start"), "end": x.get("end")} for x in shots[:12]], ensure_ascii=False) + "\n字幕数据：" + json.dumps(compact, ensure_ascii=False)[:34000]
     images = [item.get("image", "") for item in shots[:12]]
-    result = _creative_asset_prompt(prompt, images, cfg)
+    # 原片理解一次要看 12 张图并输出长结构化 JSON，属于最重的视觉调用，
+    # 给 180 秒余量；宁可慢也不能降级成空壳理解。
+    result = _creative_asset_prompt(prompt, images, cfg, timeout=180)
     units = result.get("story_units") or []
     incomplete = (not result.get("shot_analysis") or not units or
                   any(not x.get("transition") or not x.get("emotion_changes")
                       for x in units if isinstance(x, dict)))
     if incomplete:
         repair = prompt + "\n上一次结果缺少情绪、剧情承接或原片景别分析。请重新输出完整 JSON；这些字段不得为空。"
-        result = _creative_asset_prompt(repair, images[:6], cfg)
+        result = _creative_asset_prompt(repair, images[:6], cfg, timeout=180)
     return result
 
 
@@ -812,8 +814,13 @@ def _validate_creative_phase(
         raise HTTPException(502, "AI 没有返回结构化结果")
     if phase == "script":
         script = result.get("script") or {}
-        if not script.get("story_units") or not script.get("shots"):
+        shots = script.get("shots") or []
+        if not script.get("story_units") or not shots:
             raise HTTPException(502, "新脚本缺少剧情单元或镜头，已阻止残缺结果进入下一步")
+        empty_dialogue = sum(1 for x in shots if isinstance(x, dict)
+                             and not str(x.get("dialogue") or "").strip())
+        if empty_dialogue > max(1, len(shots) // 2):
+            raise HTTPException(502, "新脚本多数镜头缺少新台词，已阻止残缺结果进入下一步")
         result.setdefault("role_profiles", [])
         result.setdefault("product_profiles", [])
     elif phase == "storyboard":
@@ -950,7 +957,8 @@ def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> li
 
 
 def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
-                           max_tokens: int = 6144, attempts: int = 2) -> dict:
+                           max_tokens: int = 6144, attempts: int = 2,
+                           timeout: int = 120) -> dict:
     """让视觉模型理解人物/产品参考图，并输出受约束 JSON。"""
     valid_images = [image for image in images[:12]
                     if isinstance(image, str) and image.startswith("data:image/")
@@ -972,7 +980,7 @@ def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
                       "max_tokens": max(1024, min(8192, int(max_tokens))),
                       "enable_thinking": False,
                       "response_format": {"type": "json_object"}},
-                timeout=120,
+                timeout=timeout,
             )
             if response.status_code != 200:
                 raise HTTPException(502, f"视觉模型返回异常（HTTP {response.status_code}）")
@@ -1424,6 +1432,7 @@ async def creative_deconstruct(
             scenes, audio_run = await asyncio.gather(scenes_task, audio_task)
         transcript = {"text": "", "segments": []}
         asr_warning = ""
+        cacheable = True  # 降级产生的残缺结果不允许进缓存，否则重试无法自愈
         if not srt_segments and audio_run and audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
             with _asr_media_lock:
                 _asr_media[token] = (audio_path, time.time() + 600)
@@ -1436,6 +1445,7 @@ async def creative_deconstruct(
             except Exception as exc:
                 logger.warning("creative_asr_fallback reason=%s", exc)
                 asr_warning = "台词识别暂时失败，镜头拆解已保留，可稍后重试。"
+                cacheable = False
         else:
             asr_warning = "视频没有可识别音轨，已完成镜头拆解。"
 
@@ -1462,6 +1472,7 @@ async def creative_deconstruct(
                     base_analysis if isinstance(base_analysis, dict) else {}, segments))
             segments = _merge_speaker_calibration(segments, understanding)
             understanding_warning = "深层剧情理解暂未完成，已保留可核验的字幕人物和基础结构。"
+            cacheable = False
         result = {
             "duration": round(duration, 2), "shots": scenes,
             "transcript": segments, "transcript_text": " ".join(x.get("text", "") for x in segments),
@@ -1470,7 +1481,9 @@ async def creative_deconstruct(
             "warning": " ".join(x for x in (asr_warning if not srt_segments else "", understanding_warning) if x),
             "processing": "优先使用 SRT；否则由语音模型转写。FFmpeg 提取镜头，AI 校准说话人与剧情结构；临时文件完成后删除。",
         }
-        _cache_put(cache_key, result, _creative_cache)
+        # 只有完整成功才写缓存；降级结果（转写/理解失败）不缓存，保证重试可自愈
+        if cacheable:
+            _cache_put(cache_key, result, _creative_cache)
         return result
     finally:
         if creative_slot is not None:
@@ -1548,6 +1561,7 @@ async def creative_workbench(
     if phase == "script":
         instruction += """\n真实性硬规则：只能引用 assets 中真实存在的 asset_id；没有 product 类型素材时 product_profiles 和 product_placement 必须为空，台词与画面不得虚构产品、品牌、价格、人物履历或原片未提供的事实；信息不足时使用中性描述并标记待确认。"""
         instruction += """\n镜头字段硬规则：每个 shot_type 必须写成“景别 · 机位/运镜”（如“中景 · 平视跟拍”）；每个 visual 必须描述可直接拍摄的新画面、主体动作及与前后镜头的衔接。禁止填写“待补充”“待确认”或“参考原镜头重新设计画面”。"""
+        instruction += """\n台词创作硬规则：每个镜头的 dialogue 必须写出一至两句可直接配音的新台词——台词要与该镜头 visual 的动作严格对应，说话人必须引用已校准人物或 role_profiles 中的真实素材人物，语气贴合人物情绪；只有纯动作、无对白也无旁白的镜头才允许留空，留空镜头不得超过总数的三分之一。禁止填写“待补充”“同原片”或照抄原片台词。"""
         planned_shots = max(6, min(24, (context["target_total_seconds"] + 14) // 15))
         instruction += f"\n控制篇幅：约 {planned_shots} 个镜头；每个字段只写一到两句必要信息，避免重复服装和背景描写。"
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
@@ -1571,7 +1585,7 @@ async def creative_workbench(
                      if isinstance(row, dict)] if phase == "prompts" else None)
         final_result = _validate_creative_phase(phase, result, expected)
     except HTTPException:
-        repair_prompt = prompt + "\n上一次结果字段不完整。请重新输出完整结果：所有目标分镜组都要齐全，每个九宫格必须恰好 9 个非空画面，视频提示词必须覆盖全部来源组。只返回 JSON。"
+        repair_prompt = prompt + "\n上一次结果字段不完整。请重新输出完整结果：所有目标分镜组都要齐全，每个九宫格必须恰好 9 个非空画面，视频提示词必须覆盖全部来源组；新脚本必须为绝大多数镜头写出与素材人物对应的新台词。只返回 JSON。"
         repaired = await asyncio.to_thread(
             call_qwen_text_json, repair_prompt, cfg, 0.2, token_limit)
         if phase == "script":

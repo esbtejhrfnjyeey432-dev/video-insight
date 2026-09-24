@@ -1009,8 +1009,9 @@ $("btnAgent").onclick = function(){ runScenarioAgent((lastResult && lastResult._
 
 function secondsLabel(value){
   value = Math.max(0, Number(value) || 0);
-  var m = Math.floor(value / 60), s = (value % 60).toFixed(value < 60 ? 1 : 0);
-  return String(m).padStart(2,"0") + ":" + String(s).padStart(4,"0");
+  var m = Math.floor(value / 60), s = value - m * 60;
+  var text = (value < 60) ? s.toFixed(1) : String(Math.round(s));
+  return String(m).padStart(2,"0") + ":" + text.padStart(value < 60 ? 4 : 2, "0");
 }
 function hideCreativeFailure(){}
 function setWorkbenchStep(count){
@@ -1082,7 +1083,7 @@ $("btnDeconstruct").onclick = function(){
   btn.disabled = true; btn.textContent = "正在理解…"; $("deconstructStatus").textContent = "正在识别镜头、校准多人对白并分析剧情结构，请勿刷新…";
   api("/api/creative/deconstruct", {method:"POST", body:fd})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
-    .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast("原片拆解完成"); })
+    .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast(j.warning ? ("部分识别未完成：" + j.warning) : "原片拆解完成"); })
     .catch(function(){ fallbackDeconstruction(); })
     .finally(function(){ btn.disabled=false; btn.textContent="重新理解原片"; });
 };
@@ -1151,7 +1152,7 @@ function fallbackDeconstruction(){
   var shots=ordered.map(function(x,i){var end=i+1<ordered.length?ordered[i+1].start:duration;return {shot:i+1,start:x.start,end:Math.max(x.start,end),dialogue:"",label:x.chapter.label||x.chapter.title||"",image:""};});
   if(!shots.length)shots=[{shot:1,start:0,end:duration||15,dialogue:(lastResult&&lastResult.speech_summary)||"",label:"全片内容",image:""}];
   var data={duration:duration,shots:shots,transcript:[],transcript_text:"",warning:""};
-  creativeWorkspace.deconstruction=data;renderDeconstruction(data);toast("已为当前视频完成内容梳理，镜头结构已就绪");
+  creativeWorkspace.deconstruction=data;renderDeconstruction(data);toast("自动拆解未完成，已生成可编辑骨架；请稍候点「重新理解原片」重试");
 }
 function fallbackScript(){
   var assets=creativeWorkspace.assets.filter(function(x){return !x.hidden;}).map(function(x){return x.id;});
