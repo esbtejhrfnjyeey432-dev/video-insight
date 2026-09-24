@@ -49,6 +49,10 @@ services:
         value: "10.00"
       - key: VI_GRID_SERVICE_FEE_CNY
         value: "0.10"
+      # 九宫格付款审核后台口令（有口令者可在 payment-admin.html 批准/拒绝订单）。
+      # 注意：本文件在公开仓库中，此口令会被看到；建议部署后到 Render 网页改成更复杂的值。
+      - key: VI_PAYMENT_ADMIN_TOKEN
+        value: "2026"
       # 生产环境关闭内部解析诊断接口，避免被滥用为下载器或网络探针
       - key: VI_ENABLE_DEBUG
         value: "false"
