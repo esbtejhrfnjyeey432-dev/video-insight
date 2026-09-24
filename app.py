@@ -765,13 +765,14 @@ def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> li
 
 
 def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
-                           max_tokens: int = 6144) -> dict:
+                           max_tokens: int = 6144, attempts: int = 3) -> dict:
     """让视觉模型理解人物/产品参考图，并输出受约束 JSON。"""
     valid_images = [image for image in images[:12]
                     if isinstance(image, str) and image.startswith("data:image/")
                     and len(image) <= 1_500_000]
     last_error: Exception | None = None
-    for attempt in range(3):
+    attempt_count = max(1, min(3, int(attempts)))
+    for attempt in range(attempt_count):
         try:
             image_limit = len(valid_images) if attempt == 0 else (4 if attempt == 1 else 2)
             content = [{"type": "text", "text": prompt}]
@@ -797,7 +798,7 @@ def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
             last_error = exc
             logger.warning("creative_json_retry attempt=%s reason=%s", attempt + 1,
                            type(exc).__name__)
-            if attempt < 2:
+            if attempt + 1 < attempt_count:
                 time.sleep(0.5 * (attempt + 1))
     if isinstance(last_error, HTTPException):
         raise last_error
@@ -955,6 +956,8 @@ def call_qwen_text_json(prompt: str, cfg: dict, temperature: float = 0.2) -> dic
         "model": AGENT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
+        "max_tokens": 6144,
+        "enable_thinking": False,
         "response_format": {"type": "json_object"},
     }
     last_err: HTTPException | None = None
@@ -1323,15 +1326,29 @@ async def creative_workbench(
         instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
     token_limit = 4096 if phase in {"script", "storyboard"} else 3072
-    result = await asyncio.to_thread(_creative_asset_prompt, prompt, images, cfg, token_limit)
+    try:
+        result = await asyncio.to_thread(
+            _creative_asset_prompt, prompt, images, cfg, token_limit,
+            1 if phase == "script" else 3)
+    except HTTPException:
+        if phase != "script":
+            raise
+        logger.warning("creative_script_visual_fallback=text_model")
+        result = await asyncio.to_thread(
+            call_qwen_text_json,
+            prompt + "\n视觉脚本通道暂不可用。请仅依据上述已提取事实完成脚本，禁止补造事实。",
+            cfg, 0.2)
     if phase == "script":
         result = _sanitize_creative_script(result, payload.get("assets") or [])
     try:
         return _validate_creative_phase(phase, result)
     except HTTPException:
         repair_prompt = prompt + "\n上一次结果字段不完整。请严格按指定 JSON 结构补全必填字段，只返回 JSON。"
-        repaired = await asyncio.to_thread(
-            _creative_asset_prompt, repair_prompt, images[:4], cfg, token_limit)
+        if phase == "script":
+            repaired = await asyncio.to_thread(call_qwen_text_json, repair_prompt, cfg, 0.2)
+        else:
+            repaired = await asyncio.to_thread(
+                _creative_asset_prompt, repair_prompt, images[:4], cfg, token_limit)
         if phase == "script":
             repaired = _sanitize_creative_script(repaired, payload.get("assets") or [])
         return _validate_creative_phase(phase, repaired)
