@@ -58,6 +58,18 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(result["role_profiles"], [])
         self.assertEqual(result["product_profiles"], [])
 
+    def test_script_cannot_reference_unprovided_products_or_assets(self):
+        result = app._sanitize_creative_script({
+            "product_profiles": [{"asset_id": "made-up", "name": "虚构产品"}],
+            "script": {
+                "story_units": [{"unit": 1, "product_placement": "植入虚构产品"}],
+                "shots": [{"shot": 1, "asset_ids": ["person-1", "made-up"]}],
+            },
+        }, [{"id": "person-1", "type": "person", "hidden": False}])
+        self.assertEqual(result["product_profiles"], [])
+        self.assertEqual(result["script"]["story_units"][0]["product_placement"], "")
+        self.assertEqual(result["script"]["shots"][0]["asset_ids"], ["person-1"])
+
     def test_health_is_dependency_free(self):
         self.assertEqual(app.health(), {"ok": True, "service": "video-insight"})
 

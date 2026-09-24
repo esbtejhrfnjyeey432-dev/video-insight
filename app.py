@@ -662,6 +662,27 @@ def _validate_creative_phase(phase: str, result: dict) -> dict:
     return result
 
 
+def _sanitize_creative_script(result: dict, assets: list[dict]) -> dict:
+    """保证模型只引用本轮真实上传的素材。"""
+    allowed = {str(item.get("id")) for item in assets
+               if isinstance(item, dict) and item.get("id") and not item.get("hidden")}
+    has_product = any(isinstance(item, dict) and item.get("type") == "product"
+                      and not item.get("hidden") for item in assets)
+    script = result.get("script") if isinstance(result, dict) else None
+    if isinstance(script, dict):
+        for shot in script.get("shots") or []:
+            if isinstance(shot, dict):
+                shot["asset_ids"] = [str(value) for value in (shot.get("asset_ids") or [])
+                                     if str(value) in allowed]
+        if not has_product:
+            for unit in script.get("story_units") or []:
+                if isinstance(unit, dict):
+                    unit["product_placement"] = ""
+    if not has_product and isinstance(result, dict):
+        result["product_profiles"] = []
+    return result
+
+
 def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> list[dict]:
     """用 FFmpeg 场景分数寻找镜头切换点并输出低分辨率关键帧。"""
     pattern = os.path.join(out_dir, "scene-%03d.jpg")
@@ -1243,6 +1264,7 @@ async def creative_workbench(
     if phase == "script":
         images = (original_images[:2] + asset_images[:4])[:6]
         context.pop("storyboard", None)
+        instruction += """\n真实性硬规则：只能引用 assets 中真实存在的 asset_id；没有 product 类型素材时 product_profiles 和 product_placement 必须为空，台词与画面不得虚构产品、品牌、价格、人物履历或原片未提供的事实；信息不足时使用中性描述并标记待确认。"""
     elif phase == "storyboard":
         images = asset_images[:6]
         for key in ("analysis", "shots", "transcript", "reference_script", "understanding"):
@@ -1260,12 +1282,16 @@ async def creative_workbench(
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
     token_limit = 4096 if phase in {"script", "storyboard"} else 3072
     result = await asyncio.to_thread(_creative_asset_prompt, prompt, images, cfg, token_limit)
+    if phase == "script":
+        result = _sanitize_creative_script(result, payload.get("assets") or [])
     try:
         return _validate_creative_phase(phase, result)
     except HTTPException:
         repair_prompt = prompt + "\n上一次结果字段不完整。请严格按指定 JSON 结构补全必填字段，只返回 JSON。"
         repaired = await asyncio.to_thread(
             _creative_asset_prompt, repair_prompt, images[:4], cfg, token_limit)
+        if phase == "script":
+            repaired = _sanitize_creative_script(repaired, payload.get("assets") or [])
         return _validate_creative_phase(phase, repaired)
 
 
