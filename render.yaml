@@ -30,13 +30,18 @@ services:
         value: "640"
       - key: VI_MAX_VIDEO_MB
         value: "200"
-      # 本地视频只上传关键帧，可多人同时分析；链接解析涉及 ffmpeg，单独限流防止 OOM
+      # 并发分池：本地上传与帧解析走轻量池（4 路并行），互不阻塞；
+      # 链接下载与全片拆解是重活，限制并发防止免费层 OOM。
       - key: VI_MAX_FRAME_CONCURRENT
         value: "4"
+      - key: VI_MAX_UPLOAD_CONCURRENT
+        value: "4"
       - key: VI_MAX_LINK_CONCURRENT
-        value: "1"
+        value: "2"
+      - key: VI_MAX_CREATIVE_CONCURRENT
+        value: "2"
       - key: VI_QUEUE_TIMEOUT
-        value: "20"
+        value: "60"
       # 生产环境关闭内部解析诊断接口，避免被滥用为下载器或网络探针
       - key: VI_ENABLE_DEBUG
         value: "false"

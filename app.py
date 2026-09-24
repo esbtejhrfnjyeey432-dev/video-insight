@@ -64,13 +64,19 @@ ACCESS_CODE = os.environ.get("VI_ACCESS_CODE", "").strip()
 DEPLOY_MODE = bool(ENV_API_KEY)  # 服务端注入 Key 即视为公开部署模式
 DAILY_LIMIT = int(os.environ.get("VI_DAILY_LIMIT", "20"))  # 部署模式：每天最多解析次数
 _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外泄后被刷爆额度
-MAX_LINK_CONCURRENT = max(1, int(os.environ.get("VI_MAX_LINK_CONCURRENT", "1")))
+# 并发分池：轻任务（本地/浏览器抽帧）允许多人并行；重任务（远程下载、全片拆解）
+# 限制并发防止免费层 OOM。所有请求彼此独立（临时目录/令牌隔离），互不覆盖。
+MAX_LINK_CONCURRENT = max(1, int(os.environ.get("VI_MAX_LINK_CONCURRENT", "2")))
+MAX_UPLOAD_CONCURRENT = max(1, int(os.environ.get("VI_MAX_UPLOAD_CONCURRENT", "4")))
 MAX_FRAME_CONCURRENT = max(1, int(os.environ.get("VI_MAX_FRAME_CONCURRENT", "4")))
 MAX_AGENT_CONCURRENT = max(1, int(os.environ.get("VI_MAX_AGENT_CONCURRENT", "2")))
-ANALYSIS_QUEUE_TIMEOUT = max(1, int(os.environ.get("VI_QUEUE_TIMEOUT", "20")))
+MAX_CREATIVE_CONCURRENT = max(1, int(os.environ.get("VI_MAX_CREATIVE_CONCURRENT", "2")))
+ANALYSIS_QUEUE_TIMEOUT = max(1, int(os.environ.get("VI_QUEUE_TIMEOUT", "60")))
 _link_slots = asyncio.Semaphore(MAX_LINK_CONCURRENT)
+_upload_slots = asyncio.Semaphore(MAX_UPLOAD_CONCURRENT)
 _frame_slots = asyncio.Semaphore(MAX_FRAME_CONCURRENT)
 _agent_slots = asyncio.Semaphore(MAX_AGENT_CONCURRENT)
+_creative_slots = asyncio.Semaphore(MAX_CREATIVE_CONCURRENT)
 _asr_media: dict[str, tuple[str, float]] = {}
 _asr_media_lock = threading.Lock()
 
@@ -274,13 +280,15 @@ async def optional_code(x_access_code: str = Header(default="")):
 
 
 async def acquire_analysis_slot(kind: str):
-    """本地抽帧与链接解析分池，轻任务多人并行，重任务限制并发防止 OOM。"""
+    """按任务类型分池：轻任务多人并行，重任务限制并发防止 OOM。"""
     slots = (_frame_slots if kind == "frames" else
-             _agent_slots if kind == "agent" else _link_slots)
+             _agent_slots if kind == "agent" else
+             _upload_slots if kind == "upload" else
+             _creative_slots if kind == "creative" else _link_slots)
     try:
         await asyncio.wait_for(slots.acquire(), timeout=ANALYSIS_QUEUE_TIMEOUT)
     except (asyncio.TimeoutError, TimeoutError):
-        raise HTTPException(503, "当前有其他视频正在分析，请稍等片刻后重试")
+        raise HTTPException(503, "当前同时分析的任务较多，请稍等片刻后重试")
     return slots
 
 
@@ -1347,6 +1355,7 @@ async def creative_deconstruct(
     video_path = os.path.join(tmpdir, "source" + suffix)
     audio_path = os.path.join(tmpdir, "track.mp3")
     token = uuid.uuid4().hex
+    creative_slot = None
     try:
         total = 0
         video_digest = hashlib.md5()
@@ -1375,6 +1384,8 @@ async def creative_deconstruct(
         cached = _cache_get(cache_key, _creative_cache)
         if cached is not None:
             return _with_cache_meta(cached)
+        # 全片拆镜是 CPU 密集重活，走独立的 creative 并发池防止 OOM
+        creative_slot = await acquire_analysis_slot("creative")
         scenes_task = asyncio.to_thread(_creative_scene_frames, video_path, tmpdir, duration)
         if srt_segments:
             scenes = await scenes_task
@@ -1438,6 +1449,8 @@ async def creative_deconstruct(
         _cache_put(cache_key, result, _creative_cache)
         return result
     finally:
+        if creative_slot is not None:
+            creative_slot.release()
         with _asr_media_lock:
             _asr_media.pop(token, None)
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -1986,7 +1999,8 @@ async def analyze(
     mode_norm, _ = _analysis_context(mode)
     scenario_norm, _ = _scenario_context(scenario)
     cache_key: str | None = None
-    analysis_slots = await acquire_analysis_slot("link")
+    # 本地上传走独立并发池（4 路），链接解析走下载池（2 路），互不阻塞
+    analysis_slots = await acquire_analysis_slot("upload" if file is not None else "link")
     tmpdir = tempfile.mkdtemp(prefix="vinsight_video_")
     try:
         platform, title = "本地文件", ""
