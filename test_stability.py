@@ -103,7 +103,7 @@ class StabilityTests(unittest.TestCase):
             "post_copy": {"titles": [], "body": "", "tags": []},
         }
         with mock.patch("app.load_config", return_value={"api_key": "test"}), \
-             mock.patch("app._creative_asset_prompt", return_value=model_result) as generate:
+             mock.patch("app.call_qwen_text_json", return_value=model_result) as generate:
             result = asyncio.run(app.creative_workbench({
                 "phase": "script", "assets": [], "deconstruction": {},
                 "analysis": {}, "target_total_seconds": 60,
@@ -293,27 +293,40 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(app._scenario_context("unknown")[0], "course")
 
     def test_native_pptx_and_pdf_exports(self):
+        import base64
+        from PIL import Image
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (640, 360), (91, 92, 226)).save(image_buffer, format="PNG")
         report = {
             "title": "高效学习课程",
             "key_info": ["主动回忆", "间隔重复"],
             "overall_summary": "课程总结",
             "course": {
                 "learning_objectives": ["掌握三个方法"],
+                "outline": [{"title": "第一章", "points": ["理解主动回忆"]}],
                 "slides": [{
                     "title": "主动回忆",
                     "bullets": ["合上书本自测"],
                     "speaker_notes": "请让学员现场练习",
                 }],
             },
+            "_export_images": ["data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode()],
         }
+        docx = app._build_docx(report).getvalue()
         pptx = app._build_pptx(report).getvalue()
         pdf = app._build_pdf(report).getvalue()
+        self.assertTrue(docx.startswith(b"PK"))
         self.assertTrue(pptx.startswith(b"PK"))
         self.assertTrue(pdf.startswith(b"%PDF"))
+        from docx import Document
         from pptx import Presentation
+        document = Document(io.BytesIO(docx))
+        self.assertIn("总体总结", "\n".join(p.text for p in document.paragraphs))
+        self.assertEqual(len(document.inline_shapes), 1)
         deck = Presentation(io.BytesIO(pptx))
-        self.assertEqual(len(deck.slides), 2)
-        self.assertIn("主动回忆", deck.slides[1].shapes.title.text)
+        self.assertGreaterEqual(len(deck.slides), 4)
+        self.assertTrue(any(getattr(slide.shapes, "title", None) and
+                            "主动回忆" in slide.shapes.title.text for slide in deck.slides))
 
 
 if __name__ == "__main__":

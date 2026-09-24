@@ -6,32 +6,39 @@
 <title>VideoInsight · 视频解析工具</title>
 <style>
   :root{
-    --blue:#185FA5; --blue-l:#E6F1FB; --blue-d:#0C447C;
-    --teal:#0F6E56; --teal-l:#E1F5EE; --teal-d:#085041;
+    --blue:#5B5CE2; --blue-l:#EEF0FF; --blue-d:#3537A6;
+    --teal:#0E9384; --teal-l:#E8FAF7; --teal-d:#087569;
     --amber:#854F0B; --amber-l:#FAEEDA;
-    --text:#1f2328; --muted:#6a737d; --line:#e4e7ec; --bg:#f6f8fa;
+    --text:#172033; --muted:#687386; --line:#E5E9F2; --bg:#F5F7FB;
+    --surface:#fff; --shadow:0 12px 36px rgba(42,48,83,.08);
   }
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
-  header{background:#fff;border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20}
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:radial-gradient(circle at 10% 0%,#eef0ff 0,transparent 28%),radial-gradient(circle at 90% 8%,#e8faf7 0,transparent 24%),var(--bg);color:var(--text);line-height:1.65}
+  header{background:rgba(255,255,255,.88);backdrop-filter:blur(18px);border-bottom:1px solid rgba(229,233,242,.9);padding:13px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20}
   .logo{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700}
-  .logo .dot{width:12px;height:12px;border-radius:3px;background:var(--blue);display:inline-block}
+  .logo .dot{width:13px;height:13px;border-radius:4px;background:linear-gradient(135deg,var(--blue),#8B5CF6);display:inline-block;box-shadow:0 0 0 5px rgba(91,92,226,.1)}
   .logo small{font-weight:400;color:var(--muted);font-size:13px;margin-left:2px}
   .btns{display:flex;gap:10px}
-  button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:14px;padding:8px 16px;border:1px solid var(--line);background:#fff;color:var(--text);transition:all .15s}
-  button:hover{border-color:var(--blue);color:var(--blue)}
-  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:500}
-  button.primary:hover{background:var(--blue-d);color:#fff}
+  button{font-family:inherit;cursor:pointer;border-radius:10px;font-size:14px;padding:9px 16px;border:1px solid var(--line);background:#fff;color:var(--text);transition:transform .18s,box-shadow .18s,border-color .18s,color .18s}
+  button:hover{border-color:var(--blue);color:var(--blue);transform:translateY(-1px);box-shadow:0 7px 18px rgba(42,48,83,.09)}
+  button.primary{background:linear-gradient(135deg,var(--blue),#7048D7);border-color:transparent;color:#fff;font-weight:600;box-shadow:0 9px 22px rgba(91,92,226,.24)}
+  button.primary:hover{background:linear-gradient(135deg,#4B4CC7,#623AC7);color:#fff}
   button.primary:disabled{background:#9db8d4;border-color:#9db8d4;cursor:not-allowed}
-  main{max-width:860px;margin:0 auto;padding:24px 16px 60px}
-  .hero{padding:28px;background:linear-gradient(135deg,#0C447C,#185FA5);color:#fff;border-radius:16px;margin-bottom:16px}
-  .hero h1{font-size:26px;line-height:1.3;margin-bottom:8px}.hero p{opacity:.88;font-size:14px;max-width:660px}
+  main{max-width:980px;margin:0 auto;padding:32px 18px 70px}
+  .hero{position:relative;overflow:hidden;padding:42px 42px 38px;background:linear-gradient(135deg,#272965 0%,#5356D9 58%,#7561E9 100%);color:#fff;border-radius:24px;margin-bottom:18px;box-shadow:0 24px 60px rgba(53,55,166,.22)}
+  .hero::after{content:"";position:absolute;width:320px;height:320px;border-radius:50%;right:-90px;top:-150px;background:radial-gradient(circle,rgba(255,255,255,.22),transparent 68%)}
+  .hero-eyebrow{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.18);font-size:12px;font-weight:600;margin-bottom:14px}
+  .hero h1{position:relative;font-size:34px;letter-spacing:-.6px;line-height:1.22;margin-bottom:12px;max-width:720px}.hero p{position:relative;opacity:.88;font-size:15px;max-width:700px}
+  .hero-points{position:relative;display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}.hero-point{padding:7px 11px;border-radius:9px;background:rgba(255,255,255,.1);font-size:12px;color:rgba(255,255,255,.92)}
   .banner{background:var(--amber-l);border:1px solid #ecd9ae;color:var(--amber);border-radius:10px;padding:10px 16px;font-size:14px;margin-bottom:16px;display:none}
-  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px;margin-bottom:16px}
-  .tabs{display:flex;gap:8px;margin-bottom:16px}
-  .tab{padding:7px 18px;border-radius:999px;border:1px solid var(--line);font-size:14px;background:#fff;cursor:pointer}
-  .tab.active{background:var(--blue-l);border-color:var(--blue);color:var(--blue-d);font-weight:500}
-  .drop{border:2px dashed #c6ceda;border-radius:12px;padding:36px 20px;text-align:center;color:var(--muted);cursor:pointer;transition:all .15s}
+  .card{background:rgba(255,255,255,.96);border:1px solid rgba(225,229,240,.95);border-radius:18px;padding:26px;margin-bottom:18px;box-shadow:var(--shadow)}
+  .input-card{border-color:#DADFFE;box-shadow:0 18px 45px rgba(53,55,166,.1)}
+  .input-card-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.input-card-title h2{font-size:18px;line-height:1.35}.input-card-title p{font-size:12px;color:var(--muted);margin-top:3px}.input-badge{flex:none;padding:5px 9px;border-radius:999px;background:var(--teal-l);color:var(--teal-d);font-size:11px;font-weight:700}
+  .quick-flow{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}.flow-item{display:flex;gap:11px;align-items:center;padding:13px 15px;background:rgba(255,255,255,.78);border:1px solid var(--line);border-radius:14px}.flow-num{width:30px;height:30px;flex:none;border-radius:10px;display:grid;place-items:center;background:var(--blue-l);color:var(--blue-d);font-size:12px;font-weight:800}.flow-item b{display:block;font-size:13px}.flow-item span{display:block;font-size:11px;color:var(--muted)}
+  .tabs{display:inline-flex;gap:4px;margin-bottom:16px;padding:4px;background:#F0F2F8;border-radius:12px}
+  .tab{padding:8px 17px;border-radius:9px;border:0;font-size:14px;background:transparent;cursor:pointer}
+  .tab.active{background:#fff;color:var(--blue-d);font-weight:600;box-shadow:0 4px 12px rgba(42,48,83,.08)}
+  .drop{border:1.5px dashed #BBC4DA;border-radius:15px;padding:42px 20px;text-align:center;color:var(--muted);cursor:pointer;transition:all .18s;background:linear-gradient(180deg,#FCFDFF,#F8F9FE)}
   .drop:hover,.drop.over{border-color:var(--blue);background:var(--blue-l)}
   .drop b{color:var(--text)}
   .drop .hint{font-size:13px;margin-top:6px}
@@ -47,9 +54,9 @@
   /* 原生 radio 在部分安卓 WebView 中会无视 clip-path，露出蓝色半框；
      这里由整张 label 卡片负责点击，直接隐藏控件最稳定。 */
   .scenario-option input{display:none!important}
-  .scenario-box{display:block;width:100%;height:100%;border:1px solid var(--line);border-radius:11px;padding:14px;background:#fff;transition:.15s}
+  .scenario-box{display:block;width:100%;height:100%;border:1px solid var(--line);border-radius:14px;padding:16px;background:#fff;transition:.18s}
   .scenario-box b{display:block;font-size:15px;color:var(--blue-d);margin-bottom:4px}.scenario-box span{display:block;font-size:12px;color:var(--muted);line-height:1.55}
-  .scenario-option input:checked + .scenario-box{border:2px solid var(--blue);background:var(--blue-l);padding:13px;box-shadow:0 0 0 3px rgba(24,95,165,.08)}
+  .scenario-option input:checked + .scenario-box{border:2px solid var(--blue);background:linear-gradient(135deg,#F8F8FF,#EEF0FF);padding:15px;box-shadow:0 0 0 4px rgba(91,92,226,.09)}
   .scenario-option input:focus-visible + .scenario-box{outline:3px solid rgba(24,95,165,.24);outline-offset:2px}
   .workflow-hint{margin-top:10px;padding:9px 11px;border-radius:8px;background:#f6f8fa;color:var(--muted);font-size:12px}
   .mode-note{font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 10px}
@@ -115,12 +122,14 @@
   [contenteditable="true"]{outline:2px dashed #79aede;outline-offset:3px;border-radius:3px;background:#f8fbff}
   .timeline .t.clickable{cursor:pointer;text-decoration:underline;text-underline-offset:3px}
   .video-player{width:100%;max-height:480px;background:#000;border-radius:10px;display:block}
-  .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:50;align-items:center;justify-content:center}
-  .modal{background:#fff;border-radius:14px;padding:26px;width:92%;max-width:440px}
+  .modal-mask{display:none;position:fixed;inset:0;background:rgba(23,32,51,.5);backdrop-filter:blur(5px);z-index:50;align-items:center;justify-content:center}
+  .modal{background:#fff;border-radius:20px;padding:28px;width:92%;max-width:460px;box-shadow:0 26px 80px rgba(23,32,51,.22)}
   .modal h3{font-size:16px;margin-bottom:14px}
   .field{margin-bottom:14px}
   .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
-  .field input,.field select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit}
+  .field input,.field select,.field textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;font-family:inherit;background:#fff;transition:border-color .18s,box-shadow .18s}
+  .field textarea{min-height:76px;resize:vertical;line-height:1.55}
+  .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(91,92,226,.1)}
   .note{font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 12px;margin-bottom:14px}
   .modal .btns{justify-content:flex-end;display:flex;gap:10px;margin-top:6px}
   .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:10px 22px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:99}
@@ -162,7 +171,7 @@
   .privacy-line{font-size:12px;color:#6b5320;background:#fff8e8;border:1px solid #efddb1;border-radius:8px;padding:9px 11px}
   .creative-failure{display:none;margin:12px 0;padding:12px 14px;border:1px solid #e6b2ae;border-radius:9px;background:#fff4f3;color:#812b25;font-size:13px}
   .creative-failure.warn{display:block;border-color:#efddb1;background:#fff8e8;color:#6b5320}.creative-failure b{display:block;margin-bottom:4px}.creative-failure p{line-height:1.7}.creative-failure .work-actions{margin-top:8px}
-  @media(max-width:600px){.use-case-grid,.scenario-grid{grid-template-columns:1fr}.use-cases{padding:18px}.hero{padding:22px}.hero h1{font-size:22px}.work-steps{grid-template-columns:1fr 1fr}.work-output{overflow-x:auto}.work-output table{min-width:680px}}
+  @media(max-width:700px){header{padding:11px 14px}.logo small{display:none}.btns{gap:6px}.btns button{padding:7px 10px;font-size:12px}main{padding:18px 12px 54px}.quick-flow{grid-template-columns:1fr}.use-case-grid,.scenario-grid{grid-template-columns:1fr}.use-cases{padding:18px}.hero{padding:28px 22px;border-radius:19px}.hero h1{font-size:27px}.hero-points{gap:7px}.card{padding:19px;border-radius:15px}.input-card-title{align-items:center}.work-steps{grid-template-columns:1fr 1fr}.work-output{overflow-x:auto}.work-output table{min-width:680px}}
 </style>
 <script>window.VI_API_BASE = "https://video-insight-9q9i.onrender.com";</script>
 </head>
@@ -177,8 +186,14 @@
 
 <main>
   <section class="hero">
-    <h1>VideoInsight 智能视频内容分析平台</h1>
-    <p>面向课程与讲座复盘、内容整理与二次创作两类应用场景，提供视频解析、关键信息提取、结构化整理及多格式成果导出。</p>
+    <div class="hero-eyebrow">✦ AI 视频理解工作台</div>
+    <h1>上传一个视频，把内容变成可用成果</h1>
+    <p>从原片理解、台词与时间轴，到课程复盘、二创脚本和连续分镜，一次整理完成。</p>
+    <div class="hero-points">
+      <span class="hero-point">原视频留在浏览器</span>
+      <span class="hero-point">课程最长支持 3 小时</span>
+      <span class="hero-point">报告与脚本可继续编辑</span>
+    </div>
   </section>
   <div class="banner" id="noKeyBanner">还没有配置 API Key：可以先点右上角「演示模式」看完整效果；要分析自己的视频，请在「设置」里填入阿里百炼 API Key。</div>
 
@@ -190,7 +205,17 @@
     <div class="history-list" id="historyList"></div>
   </div>
 
-  <div class="card">
+  <section class="quick-flow" aria-label="使用流程">
+    <div class="flow-item"><span class="flow-num">01</span><span><b>添加视频</b><span>上传文件或粘贴公开视频链接</span></span></div>
+    <div class="flow-item"><span class="flow-num">02</span><span><b>AI 理解</b><span>提取结构、人物、重点与台词</span></span></div>
+    <div class="flow-item"><span class="flow-num">03</span><span><b>带走成果</b><span>编辑、导出或继续生成二创内容</span></span></div>
+  </section>
+
+  <div class="card input-card">
+    <div class="input-card-title">
+      <div><h2>开始处理视频</h2><p>先选择来源和使用场景，系统会自动匹配处理流程</p></div>
+      <span class="input-badge">无需安装</span>
+    </div>
     <div class="tabs">
       <div class="tab active" data-tab="upload">上传视频（推荐）</div>
       <div class="tab" data-tab="url">视频链接</div>
@@ -353,7 +378,7 @@
       <div class="export-group"><span class="export-label">下载报告</span>
         <button id="btnExport">Markdown</button>
         <button id="btnWord">Word</button>
-        <button id="btnPpt">PPTX</button>
+        <button id="btnPpt" data-course-only="1">PPTX</button>
         <button id="btnPdf">PDF</button>
       </div>
     </div>
@@ -895,6 +920,8 @@ function render(a){
   var tags = (a.tags || []).map(function(t){ return '<span class="tagchip">' + esc(t) + "</span>"; }).join(" ");
   var meta = (a._meta || {});
   var scenario = meta.scenario || "course";
+  /* PPTX 是课件交付格式，只在课程复盘结果中出现；二创保留更实用的脚本类导出。 */
+  $("btnPpt").style.display = scenario === "course" ? "inline-block" : "none";
   var t = meta.title ? " · 《" + esc(meta.title.length > 24 ? meta.title.slice(0, 24) + "…" : meta.title) + "》" : "";
   $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 视频约 " + (meta.duration || 0) + " 秒 · 内容分析完成";
   $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return '<li data-editable="1">' + esc(p) + "</li>"; }).join("");
@@ -1274,6 +1301,19 @@ function buildMarkdown(a){
     md.push("\n### 课程大纲"); (course.outline||[]).forEach(function(x){md.push("- **"+(x.title||"")+"**："+(x.points||[]).join("；"));});
     md.push("\n### PPT 课件与讲师备注"); (course.slides||[]).forEach(function(x,i){md.push("\n#### "+(i+1)+". "+(x.title||"")+"\n"+(x.bullets||[]).map(function(b){return "- "+b;}).join("\n")+"\n\n讲师备注："+(x.speaker_notes||""));});
   }
+  var wb=a.creative_workbench||{}, ws=(wb.script||{}).script||{};
+  if(Object.keys(ws).length){
+    md.push("\n## 二创工作台 · 完整新脚本");
+    md.push("\n### "+(ws.title||"新脚本")+"\n"+(ws.creative_angle||""));
+    md.push("\n| 镜头 | 时间 | 说话人 / 情绪 | 画面 | 台词 |\n|---|---|---|---|---|");
+    (ws.shots||[]).forEach(function(x){md.push("| "+(x.shot||"")+" | "+(x.start||"")+"–"+(x.end||"")+"s | "+(x.speaker||"")+" / "+(x.emotion||"")+" | "+String(x.visual||"").replace(/\|/g,"/")+" | "+String(x.dialogue||"").replace(/\|/g,"/")+" |");});
+  }
+  if((wb.storyboard||[]).length){
+    md.push("\n## 连续分镜方案");
+    wb.storyboard.forEach(function(x){md.push("\n### 第 "+(x.group||x.shot||"")+" 组 · "+(x.time||"")+(x.panels||[]).map(function(p){return "\n- "+(p.panel||"")+". "+(p.shot_size||"")+"｜"+(p.visual||"")+"｜"+(p.dialogue||"");}).join("")+(x.grid_prompt?"\n\n生图提示词："+x.grid_prompt:""));});
+  }
+  if((wb.prompts||[]).length){md.push("\n## 视频生成提示词");wb.prompts.forEach(function(x){md.push("\n### 第 "+(x.group||"")+" 组 · "+(x.duration||"")+" 秒\n"+(x.prompt||""));});}
+  if((a._export_images||[]).length)md.push("\n## 真实参考画面\n本报告随 Word、PDF 或课程 PPTX 附带 "+a._export_images.length+" 张当前任务真实参考图。Markdown 为保证文件轻量，不内嵌 Base64 图片。");
   if(a.overall_summary) md.push("\n## 总体总结\n" + a.overall_summary);
   return md.join("\n");
 }
@@ -1287,11 +1327,23 @@ function downloadBlob(blob, filename){
   link.click();
   setTimeout(function(){ URL.revokeObjectURL(link.href); }, 1000);
 }
+function prepareExportReport(){
+  syncReportFromDom();
+  var report=JSON.parse(JSON.stringify(lastResult||{}));
+  report.creative_workbench={script:creativeWorkspace.script||{},storyboard:creativeWorkspace.storyboard||[],prompts:creativeWorkspace.prompts||[]};
+  var images=[],seen={};
+  function addImage(value){if(typeof value!=="string"||value.indexOf("data:image/")!==0||seen[value]||images.length>=6)return;seen[value]=1;images.push(value);}
+  (creativeWorkspace.deconstruction&&creativeWorkspace.deconstruction.shots||[]).filter(function(x){return x&&x.image;}).filter(function(x,i,all){return i%Math.max(1,Math.ceil(all.length/3))===0;}).forEach(function(x){addImage(x.image);});
+  creativeWorkspace.assets.filter(function(x){return x&&!x.hidden;}).forEach(function(x){addImage(x.image);});
+  creativeWorkspace.storyboard.forEach(function(x){addImage(x.generated_grid_url);});
+  report._export_images=images;
+  return report;
+}
 function downloadServerFile(path, extension, button){
   if(!lastResult){ toast("请先完成一次解析"); return; }
-  syncReportFromDom();
+  var report=prepareExportReport();
   var old = button.textContent; button.disabled = true; button.textContent = "生成中…";
-  api(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({report:lastResult})})
+  api(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({report:report})})
     .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail || "生成失败"); }); return r.blob(); })
     .then(function(blob){ downloadBlob(blob, safeFilename(lastResult.title) + extension); toast("文件已加入下载队列"); })
     .catch(function(err){ toast(err.message || "文件生成失败，请重试"); })
@@ -1319,14 +1371,11 @@ function reportHtml(a){
 
 $("btnExport").onclick = function(){
   if(!lastResult){ toast("请先完成一次解析"); return; }
-  syncReportFromDom();
-  downloadBlob(new Blob([buildMarkdown(lastResult)], {type:"text/markdown;charset=utf-8"}), safeFilename(lastResult.title) + ".md");
+  var report=prepareExportReport();
+  downloadBlob(new Blob([buildMarkdown(report)], {type:"text/markdown;charset=utf-8"}), safeFilename(lastResult.title) + ".md");
 };
 $("btnWord").onclick = function(){
-  if(!lastResult){ toast("请先完成一次解析"); return; }
-  syncReportFromDom();
-  var doc = '<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Microsoft YaHei,sans-serif;line-height:1.7;padding:36px}h1{color:#0C447C}h2{margin-top:24px;color:#185FA5}li{margin:6px 0}</style></head><body>' + reportHtml(lastResult) + '</body></html>';
-  downloadBlob(new Blob(["\ufeff" + doc], {type:"application/msword"}), safeFilename(lastResult.title) + ".doc");
+  downloadServerFile("/api/export/docx", ".docx", this);
 };
 $("btnPpt").onclick = function(){
   downloadServerFile("/api/export/pptx", "-课件.pptx", this);

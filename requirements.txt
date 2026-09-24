@@ -7,4 +7,5 @@ python-multipart==0.0.32
 yt-dlp==2026.8.19
 curl_cffi==0.16.3
 python-pptx==1.0.2
+python-docx==1.2.0
 reportlab==4.4.4

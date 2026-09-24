@@ -67,5 +67,9 @@ for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {
 }
 assert(html.includes("视频配文案"), "Creative workflow should expose generic video post copy");
 assert(!html.includes("小红书文案"), "Creative copy must not be tied to a specific platform");
+assert(html.includes('id="btnPpt" data-course-only="1"'),
+  "PPTX export should be marked as course-only");
+assert(html.includes('scenario === "course" ? "inline-block" : "none"'),
+  "PPTX export should be hidden for creative reports");
 
 console.log("Frontend feature tests OK");

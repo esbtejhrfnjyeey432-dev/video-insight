@@ -1357,18 +1357,13 @@ async def creative_workbench(
         instruction += """\n真实性硬规则：只能引用 assets 中真实存在的 asset_id；没有 product 类型素材时 product_profiles 和 product_placement 必须为空，台词与画面不得虚构产品、品牌、价格、人物履历或原片未提供的事实；信息不足时使用中性描述并标记待确认。"""
     prompt = instruction + "\n用户当前工作区数据：" + json.dumps(context, ensure_ascii=False)[:65000]
     token_limit = 4096 if phase in {"script", "storyboard"} else 3072
-    try:
+    if phase == "script":
+        # 原片视觉理解已在基础解析/深度拆解阶段完成。脚本阶段直接复用结构化结果，
+        # 避免重复上传图片并等待视觉模型；素材图片留给后续分镜阶段使用。
+        result = await asyncio.to_thread(call_qwen_text_json, prompt, cfg, 0.2)
+    else:
         result = await asyncio.to_thread(
-            _creative_asset_prompt, prompt, images, cfg, token_limit,
-            1 if phase == "script" else 3)
-    except HTTPException:
-        if phase != "script":
-            raise
-        logger.warning("creative_script_visual_fallback=text_model")
-        result = await asyncio.to_thread(
-            call_qwen_text_json,
-            prompt + "\n视觉脚本通道暂不可用。请仅依据上述已提取事实完成脚本，禁止补造事实。",
-            cfg, 0.2)
+            _creative_asset_prompt, prompt, images, cfg, token_limit, 3)
     if phase == "script":
         result = _sanitize_creative_script(result, payload.get("assets") or [])
     try:
@@ -1407,21 +1402,169 @@ def _validated_export_report(payload: dict) -> dict:
     report = payload.get("report") if isinstance(payload, dict) else None
     if not isinstance(report, dict) or not str(report.get("title") or "").strip():
         raise HTTPException(400, "没有可导出的报告")
-    if len(json.dumps(report, ensure_ascii=False)) > 500_000:
+    if len(json.dumps(report, ensure_ascii=False)) > 12_000_000:
         raise HTTPException(413, "报告内容过大")
     return report
+
+
+def _export_image_bytes(report: dict, limit: int = 6) -> list[bytes]:
+    """只接受前端当前工作区传入的受限 data URL，不抓取任何外部图片。"""
+    images: list[bytes] = []
+    total = 0
+    for value in (report.get("_export_images") or [])[:limit]:
+        if not isinstance(value, str):
+            continue
+        match = re.match(r"^data:image/(?:jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=]+)$", value)
+        if not match:
+            continue
+        try:
+            raw = base64.b64decode(match.group(1), validate=True)
+        except Exception:
+            continue
+        if not 1024 <= len(raw) <= 2_000_000 or total + len(raw) > 8_000_000:
+            continue
+        images.append(raw)
+        total += len(raw)
+    return images
+
+
+def _workbench_export(report: dict) -> dict:
+    value = report.get("creative_workbench") or {}
+    return value if isinstance(value, dict) else {}
+
+
+def _build_docx(report: dict) -> io.BytesIO:
+    """生成包含完整分析、创作成果与真实参考图的原生 DOCX。"""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches, Pt, RGBColor
+
+    doc = Document()
+    styles = doc.styles
+    styles["Normal"].font.name = "Microsoft YaHei"
+    styles["Normal"].font.size = Pt(10.5)
+    title = doc.add_heading(str(report.get("title") or "视频分析报告"), 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta = doc.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta.add_run("VideoInsight · 完整成果报告").font.color.rgb = RGBColor(91, 92, 226)
+
+    def heading(name: str):
+        doc.add_heading(name, level=1)
+
+    def bullets(items):
+        for item in items or []:
+            doc.add_paragraph(str(item), style="List Bullet")
+
+    if report.get("overall_summary"):
+        heading("总体总结")
+        doc.add_paragraph(str(report["overall_summary"]))
+    heading("关键信息")
+    bullets(report.get("key_info"))
+    if report.get("chapters"):
+        heading("章节时间轴")
+        table = doc.add_table(rows=1, cols=2)
+        table.style = "Light Shading Accent 1"
+        table.rows[0].cells[0].text, table.rows[0].cells[1].text = "时间", "内容"
+        for item in report.get("chapters") or []:
+            cells = table.add_row().cells
+            cells[0].text = str(item.get("time") or "")
+            cells[1].text = str(item.get("label") or item.get("title") or "")
+    if report.get("speech_summary"):
+        heading("语音内容摘要")
+        doc.add_paragraph(str(report["speech_summary"]))
+
+    course = report.get("course") or {}
+    if course:
+        heading("课程整理")
+        doc.add_heading("学习目标", level=2); bullets(course.get("learning_objectives"))
+        doc.add_heading("课程大纲", level=2)
+        for item in course.get("outline") or []:
+            doc.add_paragraph(str(item.get("title") or "课程章节"), style="Heading 3")
+            bullets(item.get("points"))
+        doc.add_heading("课件与讲师备注", level=2)
+        for index, item in enumerate(course.get("slides") or [], 1):
+            doc.add_paragraph(f"{index}. {item.get('title') or '课程内容'}", style="Heading 3")
+            bullets(item.get("bullets"))
+            if item.get("speaker_notes"):
+                doc.add_paragraph("讲师备注：" + str(item["speaker_notes"]))
+
+    creative = report.get("creative") or {}
+    if creative:
+        heading("二创内容包")
+        for name, value in (creative.get("scripts") or {}).items():
+            doc.add_heading(f"{name} 脚本", level=2); doc.add_paragraph(str(value))
+        doc.add_heading("精彩片段建议", level=2)
+        for item in creative.get("highlights") or []:
+            doc.add_paragraph(f"{item.get('start','')}–{item.get('end','')} {item.get('title','')}：{item.get('reason','')}", style="List Bullet")
+        copy = creative.get("post_copy") or creative.get("xiaohongshu") or {}
+        if copy:
+            doc.add_heading("视频配文案", level=2)
+            doc.add_paragraph(str(copy.get("body") or ""))
+            doc.add_paragraph(" ".join("#" + str(x) for x in copy.get("tags") or []))
+
+    workbench = _workbench_export(report)
+    script = (workbench.get("script") or {}).get("script") or {}
+    if script:
+        heading("二创工作台 · 新脚本")
+        doc.add_heading(str(script.get("title") or "新脚本"), level=2)
+        if script.get("creative_angle"): doc.add_paragraph(str(script["creative_angle"]))
+        table = doc.add_table(rows=1, cols=5); table.style = "Light Shading Accent 1"
+        for cell, value in zip(table.rows[0].cells, ["镜头", "时间", "人物/情绪", "画面", "台词"]): cell.text = value
+        for item in (script.get("shots") or [])[:80]:
+            cells = table.add_row().cells
+            values = [item.get("shot", ""), f"{item.get('start','')}–{item.get('end','')}s",
+                      " / ".join(str(item.get(k) or "") for k in ("speaker", "emotion")),
+                      item.get("visual", ""), item.get("dialogue", "")]
+            for cell, value in zip(cells, values): cell.text = str(value)
+    if workbench.get("storyboard"):
+        heading("二创工作台 · 分镜方案")
+        for item in workbench["storyboard"][:50]:
+            doc.add_heading(f"第 {item.get('group') or item.get('shot') or ''} 组 · {item.get('time','')}", level=2)
+            for panel in item.get("panels") or []:
+                doc.add_paragraph(f"{panel.get('panel','')}. {panel.get('shot_size','')}｜{panel.get('visual','')}｜{panel.get('dialogue','')}", style="List Bullet")
+            if item.get("grid_prompt"): doc.add_paragraph("生图提示词：" + str(item["grid_prompt"]))
+    if workbench.get("prompts"):
+        heading("二创工作台 · 视频提示词")
+        for item in workbench["prompts"][:50]:
+            doc.add_heading(f"第 {item.get('group','')} 组 · {item.get('duration','')} 秒", level=2)
+            doc.add_paragraph(str(item.get("prompt") or ""))
+
+    images = _export_image_bytes(report)
+    if images:
+        heading("真实参考画面")
+        for index, raw in enumerate(images, 1):
+            try:
+                doc.add_picture(io.BytesIO(raw), width=Inches(5.8))
+                caption = doc.add_paragraph(f"参考图 {index}")
+                caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            except Exception:
+                continue
+    output = io.BytesIO(); doc.save(output); output.seek(0)
+    return output
 
 
 def _build_pptx(report: dict) -> io.BytesIO:
     """生成原生 Office Open XML 演示文稿，而不是伪装成 PPT 的 HTML。"""
     from pptx import Presentation
-    from pptx.util import Pt
+    from pptx.util import Inches, Pt
 
     presentation = Presentation()
     presentation.core_properties.title = str(report.get("title") or "视频课程课件")[:200]
     title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
     title_slide.shapes.title.text = str(report.get("title") or "视频课程课件")
     title_slide.placeholders[1].text = "VideoInsight · 课程与讲座复盘"
+
+    overview = presentation.slides.add_slide(presentation.slide_layouts[1])
+    overview.shapes.title.text = "课程概览与核心收获"
+    overview_frame = overview.placeholders[1].text_frame
+    overview_frame.clear()
+    overview_items = ([str(report.get("overall_summary"))] if report.get("overall_summary") else []) + [
+        str(item) for item in (report.get("key_info") or [])[:6]
+    ]
+    for index, value in enumerate(overview_items or ["暂无课程概览"]):
+        paragraph = overview_frame.paragraphs[0] if index == 0 else overview_frame.add_paragraph()
+        paragraph.text = value[:500]; paragraph.font.size = Pt(22 if index == 0 else 19)
 
     course = report.get("course") or {}
     slides = course.get("slides") or []
@@ -1444,6 +1587,20 @@ def _build_pptx(report: dict) -> io.BytesIO:
         notes = str(item.get("speaker_notes") or "").strip()
         if notes:
             slide.notes_slide.notes_text_frame.text = "讲师备注：" + notes[:4000]
+
+    images = _export_image_bytes(report)
+    for offset in range(0, len(images), 4):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        title_box = slide.shapes.add_textbox(Inches(.55), Inches(.25), Inches(12.2), Inches(.55))
+        title_box.text_frame.text = "视频真实参考画面"
+        title_box.text_frame.paragraphs[0].font.size = Pt(24)
+        for local_index, raw in enumerate(images[offset:offset + 4]):
+            col, row = local_index % 2, local_index // 2
+            try:
+                slide.shapes.add_picture(io.BytesIO(raw), Inches(.65 + col * 6.35),
+                                         Inches(1 + row * 3.15), width=Inches(5.8), height=Inches(2.75))
+            except Exception:
+                continue
     output = io.BytesIO()
     presentation.save(output)
     output.seek(0)
@@ -1458,6 +1615,7 @@ def _build_pdf(report: dict) -> io.BytesIO:
     from reportlab.lib.units import mm
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import Image as RLImage
     from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
     output = io.BytesIO()
@@ -1485,6 +1643,8 @@ def _build_pdf(report: dict) -> io.BytesIO:
                 story.append(Paragraph(f"{index}. {html.escape(str(item))}", body))
 
     add_section("关键信息", report.get("key_info"))
+    add_section("章节时间轴", [f"{item.get('time','')}  {item.get('label') or item.get('title') or ''}"
+                               for item in (report.get("chapters") or []) if isinstance(item, dict)])
     add_section("语音内容摘要", report.get("speech_summary"))
     add_section("总体总结", report.get("overall_summary"))
     course = report.get("course") or {}
@@ -1502,7 +1662,36 @@ def _build_pdf(report: dict) -> io.BytesIO:
     creative = report.get("creative") or {}
     if creative:
         add_section("多时长脚本", [f"{key}: {value}" for key, value in (creative.get("scripts") or {}).items()])
+        add_section("精彩片段建议", [
+            f"{item.get('start','')}–{item.get('end','')} {item.get('title','')}：{item.get('reason','')}"
+            for item in (creative.get("highlights") or []) if isinstance(item, dict)])
+        add_section("分镜建议", [
+            f"镜头 {item.get('shot','')}（{item.get('time','')}）：{item.get('visual','')}；旁白：{item.get('narration','')}"
+            for item in (creative.get("storyboard") or []) if isinstance(item, dict)])
         add_section("视频配文案", ((creative.get("post_copy") or creative.get("xiaohongshu") or {}).get("body")))
+    workbench = _workbench_export(report)
+    script = (workbench.get("script") or {}).get("script") or {}
+    if script:
+        add_section("二创新脚本", [
+            f"镜头 {item.get('shot','')} {item.get('start','')}–{item.get('end','')}s｜{item.get('speaker','')}｜{item.get('visual','')}｜{item.get('dialogue','')}"
+            for item in (script.get("shots") or [])[:80] if isinstance(item, dict)])
+    add_section("连续分镜方案", [
+        f"第 {item.get('group') or item.get('shot') or ''} 组 {item.get('time','')}：" +
+        "；".join(f"{panel.get('shot_size','')} {panel.get('visual','')} {panel.get('dialogue','')}"
+                 for panel in (item.get("panels") or []) if isinstance(panel, dict))
+        for item in (workbench.get("storyboard") or [])[:50] if isinstance(item, dict)])
+    add_section("视频生成提示词", [str(item.get("prompt") or "")
+                                  for item in (workbench.get("prompts") or [])[:50]
+                                  if isinstance(item, dict)])
+    images = _export_image_bytes(report)
+    if images:
+        story.append(PageBreak()); story.append(Paragraph("真实参考画面", heading))
+        for index, raw in enumerate(images, 1):
+            try:
+                picture = RLImage(io.BytesIO(raw)); picture._restrictSize(170 * mm, 92 * mm)
+                story.extend([picture, Paragraph(f"参考图 {index}", body), Spacer(1, 5)])
+            except Exception:
+                continue
     doc.build(story)
     output.seek(0)
     return output
@@ -1516,6 +1705,17 @@ async def export_pptx(payload: dict = Body(...), _code: None = Depends(require_c
         output,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={"Content-Disposition": 'attachment; filename="video-course.pptx"'},
+    )
+
+
+@app.post("/api/export/docx")
+async def export_docx(payload: dict = Body(...), _code: None = Depends(require_code)):
+    report = _validated_export_report(payload)
+    output = await asyncio.to_thread(_build_docx, report)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="video-report.docx"'},
     )
 
 
