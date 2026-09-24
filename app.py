@@ -1001,8 +1001,10 @@ def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
 def _generate_storyboard_grid(board: dict, assets: list[dict], cfg: dict) -> dict:
     """根据新分镜和新资产生成一张无时间标记的二创九宫格。"""
     panels = (board.get("panels") or [])[:9]
-    if not panels:
-        raise HTTPException(400, "当前分镜组没有可生成的画面")
+    if len(panels) != 9 or any(not isinstance(panel, dict) or
+                               not str(panel.get("visual") or "").strip()
+                               for panel in panels):
+        raise HTTPException(400, "当前分镜组不是完整 9 格，请先重新生成分镜方案")
     wanted = {str(x) for x in (board.get("asset_ids") or [])}
     active = [x for x in assets if isinstance(x, dict) and not x.get("hidden")]
     matched = [x for x in active if str(x.get("id")) in wanted] or active

@@ -22,6 +22,28 @@ class StabilityTests(unittest.TestCase):
         with self.assertRaises(app.HTTPException):
             app._validate_creative_phase("storyboard", {"storyboard": []})
 
+    def test_creative_quality_rejects_incomplete_nine_grid(self):
+        with self.assertRaises(app.HTTPException):
+            app._validate_creative_phase("storyboard", {
+                "storyboard": [{"group": 1, "time": "0-15s",
+                                "panels": [{"visual": "只有一格"}]}]
+            }, 1)
+
+    def test_creative_quality_accepts_complete_nine_grid(self):
+        result = app._validate_creative_phase("storyboard", {
+            "storyboard": [{"group": 1, "time": "0-15s", "panels": [
+                {"visual": f"连续画面{i}"} for i in range(1, 10)
+            ]}]
+        }, 1)
+        self.assertEqual([x["panel"] for x in result["storyboard"][0]["panels"]],
+                         list(range(1, 10)))
+
+    def test_creative_prompts_must_cover_every_storyboard_group(self):
+        with self.assertRaises(app.HTTPException):
+            app._validate_creative_phase("prompts", {"video_prompts": [
+                {"source_groups": [1], "prompt": "只覆盖第一组"}
+            ]}, [1, 2])
+
     def test_creative_understanding_reuses_existing_analysis(self):
         result = app._understanding_from_analysis(
             {"chapters": [{"time": "00:00", "label": "开场钩子", "summary": "提出问题"}],
@@ -129,13 +151,15 @@ class StabilityTests(unittest.TestCase):
         async def scenario():
             old_timeout = app.ANALYSIS_QUEUE_TIMEOUT
             app.ANALYSIS_QUEUE_TIMEOUT = 1
-            first_slot = await app.acquire_analysis_slot("link")
+            held_slots = [await app.acquire_analysis_slot("link")
+                          for _ in range(app.MAX_LINK_CONCURRENT)]
             try:
                 with self.assertRaises(HTTPException) as caught:
                     await app.acquire_analysis_slot("link")
                 self.assertEqual(caught.exception.status_code, 503)
             finally:
-                first_slot.release()
+                for slot in held_slots:
+                    slot.release()
                 app.ANALYSIS_QUEUE_TIMEOUT = old_timeout
 
         asyncio.run(scenario())
