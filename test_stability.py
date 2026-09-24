@@ -2,6 +2,7 @@
 """不调用外部平台或 AI 的后端稳定性测试。"""
 import asyncio
 import io
+import time
 import unittest
 from unittest import mock
 
@@ -9,9 +10,20 @@ from fastapi import HTTPException
 
 import app
 import resolver
+import quota_identity
 
 
 class StabilityTests(unittest.TestCase):
+    def test_grid_quota_links_device_and_network_identity(self):
+        state = {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0,
+                 "clients": {}, "credits": {}, "orders": {}}
+        quota_identity.reserve(state, ["dev:a", "net:one"], 1.8, 2.0, 10.0, 0.2)
+        quote = quota_identity.quote(state, ["dev:b", "net:one"], 0.22, 2.0, 10.0, 0.2)
+        self.assertFalse(quote["allowed"])
+        self.assertEqual(quote["used_cny"], 1.8)
+        quote = quota_identity.quote(state, ["dev:a", "net:two"], 0.22, 2.0, 10.0, 0.2)
+        self.assertFalse(quote["allowed"])
+
     def test_grid_free_experience_stops_before_exceeding_two_yuan(self):
         state = {"date": app.time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
         with mock.patch.object(app, "_grid_usage", state), \

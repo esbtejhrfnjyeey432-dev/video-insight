@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import resolver
+import quota_identity
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -1837,7 +1838,9 @@ async def creative_storyboard_grid_quote(
     """在调用付费图片模型前返回体验余额与透明平台报价。"""
     refs = min(3, max(0, int(payload.get("reference_count") or 0)))
     with _grid_usage_lock:
-        return _grid_quote_locked(_grid_client_key(request), _grid_model_cost(refs))
+        return quota_identity.quote(_grid_usage, quota_identity.visitor_keys(request),
+                                    _grid_model_cost(refs), GRID_FREE_LIMIT_CNY,
+                                    GRID_DAILY_BUDGET_CNY, GRID_SERVICE_FEE_CNY)
 
 
 @app.post("/api/creative/storyboard-grid")
@@ -1874,13 +1877,24 @@ async def creative_storyboard_grid(
                    isinstance(item.get("image"), str) and
                    item.get("image", "").startswith("data:image/")]
     model_cost = _grid_model_cost(min(3, len(active_refs)))
-    client_key = _grid_client_key(request)
-    usage = _reserve_grid_cost(client_key, model_cost)
+    client_keys = quota_identity.visitor_keys(request)
+    with _grid_usage_lock:
+        usage = quota_identity.reserve(_grid_usage, client_keys, model_cost,
+                                       GRID_FREE_LIMIT_CNY, GRID_DAILY_BUDGET_CNY,
+                                       GRID_SERVICE_FEE_CNY)
+        if usage["reservation"] == "denied":
+            raise HTTPException(402, detail={"code": "grid_payment_required",
+                                            "message": "免费体验额度已用完，请支付本次平台生成费用后联系管理员开通。",
+                                            **usage})
+        _save_grid_usage_locked()
     try:
         result = await asyncio.to_thread(
             _generate_storyboard_grid, board, payload.get("assets") or [], cfg)
     except Exception:
-        _release_grid_cost(client_key, model_cost)
+        with _grid_usage_lock:
+            quota_identity.release(_grid_usage, client_keys, model_cost,
+                                   usage.get("reservation", "free"))
+            _save_grid_usage_locked()
         raise
     result["usage"] = usage
     _cache_put(cache_key, result, _creative_cache)

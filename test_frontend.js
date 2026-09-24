@@ -59,6 +59,8 @@ assert(context.reportHtml(sample).includes("语音内容摘要"),
   "Word/PDF export missed speech summary");
 assert(html.includes('esc(meta.speech || "仅画面分析")'),
   "Result metadata must disclose whether platform subtitles, ASR, or vision-only analysis was used");
+assert(html.includes('vi_visitor_id') && html.includes('"X-Visitor-Id": visitorId'),
+  "Paid generation quota must persist across entry and network changes");
 
 for (const id of ["historyCard", "btnClearHistory", "videoPlayer", "btnEdit", "btnWord", "btnPdf",
   "subtitleFile", "understandingOutput", "sceneAssets", "targetTotalDuration", "referenceScript",

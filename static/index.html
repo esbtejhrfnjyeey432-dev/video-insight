@@ -522,6 +522,12 @@ var reportEditing = false, activeHistoryId = "", HISTORY_KEY = "vi_recent_tasks_
 var creativeWorkspace = {deconstruction:null, assets:[], script:null, storyboard:[], prompts:[]};
 var activeToolIntent = "";
 var accessCode = localStorage.getItem("vi_code") || "";
+var visitorId = localStorage.getItem("vi_visitor_id") || "";
+if(!/^[a-z0-9_-]{20,80}$/i.test(visitorId)){
+  visitorId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID().replace(/-/g,"") :
+    (Date.now().toString(36)+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2));
+  localStorage.setItem("vi_visitor_id",visitorId);
+}
 function resetCreativeWorkspace(){
   creativeWorkspace={deconstruction:null,assets:[],script:null,storyboard:[],prompts:[]};
   ["deconstructShots","assetGrid","scriptOutput","storyboardOutput","promptOutput"].forEach(function(id){if($(id))$(id).innerHTML="";});
@@ -535,7 +541,7 @@ function resetCreativeWorkspace(){
 /* 带访问码的统一请求封装 */
 function api(path, opts){
   opts = opts || {};
-  opts.headers = Object.assign({}, opts.headers || {}, { "X-Access-Code": accessCode });
+  opts.headers = Object.assign({}, opts.headers || {}, { "X-Access-Code": accessCode, "X-Visitor-Id": visitorId });
   return fetch(API_BASE + path, opts);
 }
 /* 带超时的请求（免费云实例休眠时首次请求会挂很久，需要超时+重试而不是傻等） */
@@ -925,6 +931,7 @@ function doAnalyzeRequest(path, fd, isUpload){
     var xhr = new XMLHttpRequest();
     xhr.open("POST", API_BASE + path);
     xhr.setRequestHeader("X-Access-Code", accessCode);
+    xhr.setRequestHeader("X-Visitor-Id", visitorId);
     if(isUpload && xhr.upload){
       xhr.upload.onprogress = function(e){
         if(e.lengthComputable) onUploadProgress(Math.round(e.loaded / e.total * 100));
