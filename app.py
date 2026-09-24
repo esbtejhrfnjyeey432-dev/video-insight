@@ -82,28 +82,38 @@ _analysis_cache: dict[str, tuple[float, dict]] = {}  # key -> (expire_ts, result
 _analysis_cache_lock = threading.Lock()
 
 
-def _cache_get(key: str) -> dict | None:
+# 二创工作台缓存：与通用分析缓存分开，容量更小——
+# 拆解响应含几十张关键帧 base64，必须限制条数防止撑爆免费层内存。
+CREATIVE_CACHE_MAX = int(os.environ.get("VI_CREATIVE_CACHE_MAX", "10"))
+_creative_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _cache_get(key: str, store: dict | None = None) -> dict | None:
+    cache = _analysis_cache if store is None else store
     now = time.monotonic()
     with _analysis_cache_lock:
-        entry = _analysis_cache.get(key)
+        entry = cache.get(key)
         if not entry:
             return None
         expire_ts, result = entry
         if now >= expire_ts:
-            _analysis_cache.pop(key, None)
+            cache.pop(key, None)
             return None
         # 命中后刷新过期时间，活跃条目不会被反复淘汰
-        _analysis_cache[key] = (now + ANALYSIS_CACHE_TTL, result)
+        cache[key] = (now + ANALYSIS_CACHE_TTL, result)
         return result
 
 
-def _cache_put(key: str, result: dict) -> None:
+def _cache_put(key: str, result: dict, store: dict | None = None,
+               max_entries: int | None = None) -> None:
+    cache = _analysis_cache if store is None else store
+    limit = ANALYSIS_CACHE_MAX if max_entries is None else max_entries
     with _analysis_cache_lock:
-        if len(_analysis_cache) >= ANALYSIS_CACHE_MAX:
+        if len(cache) >= limit:
             # 简单逐出：丢弃最接近过期的一条，避免缓存无限膨胀撑爆免费层内存
-            oldest_key = min(_analysis_cache, key=lambda k: _analysis_cache[k][0])
-            _analysis_cache.pop(oldest_key, None)
-        _analysis_cache[key] = (time.monotonic() + ANALYSIS_CACHE_TTL, result)
+            oldest_key = min(cache, key=lambda k: cache[k][0])
+            cache.pop(oldest_key, None)
+        cache[key] = (time.monotonic() + ANALYSIS_CACHE_TTL, result)
 
 
 def _with_cache_meta(result: dict, **overrides) -> dict:
@@ -680,7 +690,7 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
                       for x in units if isinstance(x, dict)))
     if incomplete:
         repair = prompt + "\n上一次结果缺少情绪、剧情承接或原片景别分析。请重新输出完整 JSON；这些字段不得为空。"
-        result = _creative_asset_prompt(repair, images, cfg)
+        result = _creative_asset_prompt(repair, images[:6], cfg)
     return result
 
 
@@ -908,7 +918,7 @@ def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> li
 
 
 def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
-                           max_tokens: int = 6144, attempts: int = 3) -> dict:
+                           max_tokens: int = 6144, attempts: int = 2) -> dict:
     """让视觉模型理解人物/产品参考图，并输出受约束 JSON。"""
     valid_images = [image for image in images[:12]
                     if isinstance(image, str) and image.startswith("data:image/")
@@ -930,7 +940,7 @@ def _creative_asset_prompt(prompt: str, images: list[str], cfg: dict,
                       "max_tokens": max(1024, min(8192, int(max_tokens))),
                       "enable_thinking": False,
                       "response_format": {"type": "json_object"}},
-                timeout=240,
+                timeout=120,
             )
             if response.status_code != 200:
                 raise HTTPException(502, f"视觉模型返回异常（HTTP {response.status_code}）")
@@ -978,7 +988,7 @@ def _generate_storyboard_grid(board: dict, assets: list[dict], cfg: dict) -> dic
               "parameters": {"size": "1024*1024", "n": 1, "prompt_extend": True,
                              "enable_thinking": False, "watermark": False,
                              "negative_prompt": str(board.get("negative_prompt") or "")[:1000]}},
-        timeout=600,
+        timeout=300,
     )
     data = response.json() if response.content else {}
     if response.status_code != 200:
@@ -1121,7 +1131,7 @@ def call_qwen_text_json(prompt: str, cfg: dict, temperature: float = 0.2,
                     "Content-Type": "application/json",
                 },
                 json=body,
-                timeout=180,
+                timeout=120,
             )
         except Exception:
             logger.warning("agent_model_request_failed attempt=%s", attempt + 1)
@@ -1339,6 +1349,7 @@ async def creative_deconstruct(
     token = uuid.uuid4().hex
     try:
         total = 0
+        video_digest = hashlib.md5()
         with open(video_path, "wb") as output:
             while True:
                 chunk = await file.read(1 << 20)
@@ -1347,13 +1358,23 @@ async def creative_deconstruct(
                 total += len(chunk)
                 if total > min(MAX_VIDEO_BYTES, 300 * 1024 * 1024):
                     raise HTTPException(413, "深度拆解视频暂限 300MB 以内")
+                video_digest.update(chunk)
                 output.write(chunk)
         duration = await asyncio.to_thread(get_duration, video_path)
         if not duration or duration <= 0:
             raise HTTPException(400, "无法读取视频，请转换为 MP4（H.264/AAC）后重试")
         if duration > 30 * 60:
             raise HTTPException(400, "电商二创深度拆解暂支持 30 分钟以内视频")
-        srt_segments = _parse_srt(await subtitle.read()) if subtitle and subtitle.filename else []
+        srt_raw = await subtitle.read() if subtitle and subtitle.filename else b""
+        srt_segments = _parse_srt(srt_raw) if srt_raw else []
+        # 同一视频（含相同字幕）在缓存期内直接复用拆解结果：
+        # 省去 FFmpeg 全片拆镜 + 语音转写 + 剧情理解三段最重的耗时。
+        video_digest.update(b"|srt|")
+        video_digest.update(hashlib.md5(srt_raw).digest())
+        cache_key = "cdec:" + video_digest.hexdigest()
+        cached = _cache_get(cache_key, _creative_cache)
+        if cached is not None:
+            return _with_cache_meta(cached)
         scenes_task = asyncio.to_thread(_creative_scene_frames, video_path, tmpdir, duration)
         if srt_segments:
             scenes = await scenes_task
@@ -1363,7 +1384,7 @@ async def creative_deconstruct(
                 subprocess.run,
                 [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", video_path,
                  "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", "-y", audio_path],
-                capture_output=True, timeout=240,
+                capture_output=True, timeout=120,
             )
             scenes, audio_run = await asyncio.gather(scenes_task, audio_task)
         transcript = {"text": "", "segments": []}
@@ -1406,7 +1427,7 @@ async def creative_deconstruct(
                     base_analysis if isinstance(base_analysis, dict) else {}, segments))
             segments = _merge_speaker_calibration(segments, understanding)
             understanding_warning = "深层剧情理解暂未完成，已保留可核验的字幕人物和基础结构。"
-        return {
+        result = {
             "duration": round(duration, 2), "shots": scenes,
             "transcript": segments, "transcript_text": " ".join(x.get("text", "") for x in segments),
             "transcript_source": "srt" if srt_segments else "asr",
@@ -1414,6 +1435,8 @@ async def creative_deconstruct(
             "warning": " ".join(x for x in (asr_warning if not srt_segments else "", understanding_warning) if x),
             "processing": "优先使用 SRT；否则由语音模型转写。FFmpeg 提取镜头，AI 校准说话人与剧情结构；临时文件完成后删除。",
         }
+        _cache_put(cache_key, result, _creative_cache)
+        return result
     finally:
         with _asr_media_lock:
             _asr_media.pop(token, None)
@@ -1524,8 +1547,24 @@ async def creative_storyboard_grid(
     board = payload.get("storyboard") or {}
     if not isinstance(board, dict):
         raise HTTPException(400, "缺少分镜组")
-    return await asyncio.to_thread(
+    # 九宫格生图最慢也最贵：按分镜组+可见素材指纹缓存，重复生成/失败重试秒回。
+    grid_digest = hashlib.md5()
+    grid_digest.update(json.dumps(board, ensure_ascii=False, sort_keys=True,
+                                  default=str)[:120000].encode("utf-8"))
+    for item in (payload.get("assets") or []):
+        if isinstance(item, dict) and not item.get("hidden"):
+            image = item.get("image") or ""
+            if isinstance(image, str) and image.startswith("data:image/"):
+                grid_digest.update(b"|")
+                grid_digest.update(hashlib.md5(image.encode("utf-8")).digest())
+    cache_key = "csb:" + grid_digest.hexdigest()
+    cached = _cache_get(cache_key, _creative_cache)
+    if cached is not None:
+        return _with_cache_meta(cached)
+    result = await asyncio.to_thread(
         _generate_storyboard_grid, board, payload.get("assets") or [], cfg)
+    _cache_put(cache_key, result, _creative_cache)
+    return result
 
 
 def _validated_export_report(payload: dict) -> dict:
