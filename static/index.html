@@ -167,7 +167,7 @@
   .asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:10px 0}.asset-card{border:1px solid var(--line);border-radius:9px;padding:8px;background:#fff}.asset-card.hidden{opacity:.45}.asset-card img{width:100%;height:105px;object-fit:cover;border-radius:6px;background:#edf1f5}.asset-card input{width:100%;border:0;border-bottom:1px solid var(--line);padding:5px 2px;font:inherit;font-size:12px}.asset-actions{display:flex;gap:5px;margin-top:6px}.asset-actions button{padding:4px 7px;font-size:11px;flex:1}
   .work-textarea{width:100%;min-height:88px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;resize:vertical}.work-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .generated-grid{margin-top:12px}.generated-grid img{display:block;width:min(100%,720px);aspect-ratio:1/1;object-fit:contain;border:1px solid var(--line);border-radius:9px;background:#111}.generated-grid a{display:inline-block;margin-top:6px;color:var(--blue-d)}
-  .work-output{margin-top:12px}.work-output table{width:100%;border-collapse:collapse;font-size:12px}.work-output th,.work-output td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}.work-output th{background:#f4f7fa}.work-output td[contenteditable="true"]{background:#fffdf1}
+  .work-output{margin-top:12px;overflow-x:auto}.work-output table{width:100%;border-collapse:collapse;font-size:12px}.work-output th,.work-output td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}.work-output th{background:#f4f7fa}.work-output td[contenteditable="true"]{background:#fffdf1}.script-table{min-width:1120px;table-layout:fixed}.script-table th:nth-child(1){width:52px}.script-table th:nth-child(2){width:82px}.script-table th:nth-child(3){width:130px}.script-table th:nth-child(4){width:150px}.script-table th:nth-child(5){width:260px}.script-table th:nth-child(6){width:330px}.script-table th:nth-child(7){width:150px}.script-table td{line-height:1.65;word-break:break-word}
   .privacy-line{font-size:12px;color:#6b5320;background:#fff8e8;border:1px solid #efddb1;border-radius:8px;padding:9px 11px}
   .creative-failure{display:none;margin:12px 0;padding:12px 14px;border:1px solid #e6b2ae;border-radius:9px;background:#fff4f3;color:#812b25;font-size:13px}
   .creative-failure.warn{display:block;border-color:#efddb1;background:#fff8e8;color:#6b5320}.creative-failure b{display:block;margin-bottom:4px}.creative-failure p{line-height:1.7}.creative-failure .work-actions{margin-top:8px}
@@ -1154,7 +1154,14 @@ function fallbackDeconstruction(){
 }
 function fallbackScript(){
   var assets=creativeWorkspace.assets.filter(function(x){return !x.hidden;}).map(function(x){return x.id;});
-  var shots=(creativeWorkspace.deconstruction&&creativeWorkspace.deconstruction.shots||[]).map(function(x,i){return {shot:x.shot||i+1,start:x.start||0,end:x.end||0,shot_type:"待补充",visual:x.label||"参考原镜头重新设计画面",dialogue:x.dialogue||"",asset_ids:assets.slice(0,4)};});
+  var understanding=creativeWorkspace.deconstruction&&creativeWorkspace.deconstruction.understanding||{},analysis=understanding.shot_analysis||[];
+  var shotTypes=["全景 · 平视固定机位","中景 · 平视跟拍","近景 · 侧前方机位","特写 · 平视固定机位"];
+  var shots=(creativeWorkspace.deconstruction&&creativeWorkspace.deconstruction.shots||[]).map(function(x,i){
+    var meta=analysis.filter(function(m){return Number(m.shot)===Number(x.shot||i+1);})[0]||{},shotType=[meta.shot_size,meta.composition].filter(Boolean).join(" · ")||shotTypes[i%shotTypes.length];
+    var subject=x.label||meta.action||((x.dialogue||"").slice(0,32));
+    var visual=subject?(subject+"；保持人物动作承接上一镜，画面主体清晰，背景与剧情一致。"):("镜头 "+(x.shot||i+1)+"：人物完成本段剧情动作，并自然衔接下一镜。");
+    return {shot:x.shot||i+1,start:x.start||0,end:x.end||0,shot_type:shotType,visual:visual,dialogue:x.dialogue||"",asset_ids:assets.slice(0,4)};
+  });
   var title="新短剧脚本（可编辑草稿）";
   var data={role_profiles:[],product_profiles:[],script:{title:title,creative_angle:"根据原片时间结构整理的可编辑创作方案。",shots:shots},post_copy:{titles:[title],body:"新视频脚本已整理完成，欢迎观看并分享你的看法。",tags:["短视频","二创"]}};
   creativeWorkspace.script=data;renderNewScript(data);toast("脚本骨架已搭好，可直接修改和补充");
@@ -1172,12 +1179,17 @@ function fallbackPrompts(){
 }
 function renderNewScript(data){
   var script=data.script||{}, rows=script.shots||[];
+  var defaultShotTypes=["全景 · 平视固定机位","中景 · 平视跟拍","近景 · 侧前方机位","特写 · 平视固定机位"];
+  rows.forEach(function(x,i){
+    if(!x.shot_type||/待补充|待确认/.test(x.shot_type))x.shot_type=defaultShotTypes[i%defaultShotTypes.length];
+    if(!x.visual||/参考原镜头重新设计画面|待补充/.test(x.visual))x.visual="镜头 "+(x.shot||i+1)+"：围绕本段台词安排人物动作与场景变化，并与前后镜头自然衔接。";
+  });
   var profiles=(data.role_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"人物")+'：</b>'+esc(x.identity||"")+'；'+esc(x.personality||"")+'；'+esc(x.appearance||"")+'；造型：'+esc((x.wardrobe_by_unit||[]).map(function(w){return (w.unit||"")+" "+(w.wardrobe||"");}).join(" / ")||x.wardrobe||"")+'</p>';}).join("")+
     (data.product_profiles||[]).map(function(x){return '<p><b>'+esc(x.name||"产品")+'：</b>'+esc(x.features||"")+'</p>';}).join("");
   var units=(script.story_units||[]).map(function(x){return '<p><b>剧情单元 '+esc(x.unit)+'：</b>'+esc(x.purpose||"")+'；承接：'+esc(x.transition||"")+'；产品植入：'+esc(x.product_placement||"无")+'</p>';}).join("");
   var copy=data.post_copy||{};
   var copyHtml='<h4>视频配文案</h4><p><b>标题：</b>'+esc((copy.titles||[]).join(" / "))+'</p><p>'+esc(copy.body||"")+'</p><p>'+esc((copy.tags||[]).map(function(x){return "#"+x;}).join(" "))+'</p>';
-  var table='<h4>'+esc(script.title||"新短剧脚本")+' · '+esc(script.target_seconds||$("targetTotalDuration").value)+' 秒</h4><p>'+esc(script.creative_angle||"")+'</p>'+copyHtml+profiles+units+'<table><thead><tr><th>镜头</th><th>时间</th><th>人物/情绪</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
+  var table='<h4>'+esc(script.title||"新短剧脚本")+' · '+esc(script.target_seconds||$("targetTotalDuration").value)+' 秒</h4><p>'+esc(script.creative_angle||"")+'</p>'+copyHtml+profiles+units+'<table class="script-table"><thead><tr><th>镜头</th><th>时间</th><th>人物/情绪</th><th>景别/机位</th><th>新画面</th><th>新台词</th><th>引用素材</th></tr></thead><tbody>'+
     rows.map(function(x,i){return '<tr><td>'+esc(x.shot||i+1)+'</td><td>'+esc(x.start)+'–'+esc(x.end)+'s</td><td>'+esc((x.speaker||"")+(x.emotion?" · "+x.emotion:""))+'</td><td contenteditable="true" data-script-field="shot_type" data-script-i="'+i+'">'+esc(x.shot_type||"")+'</td><td contenteditable="true" data-script-field="visual" data-script-i="'+i+'">'+esc(x.visual||"")+'</td><td contenteditable="true" data-script-field="dialogue" data-script-i="'+i+'">'+esc(x.dialogue||"")+'</td><td>'+esc((x.asset_ids||[]).join("、"))+'</td></tr>';}).join("")+'</tbody></table>';
   $("scriptOutput").innerHTML=table; $("scriptPanel").style.display="block"; setWorkbenchStep(3); $("scriptPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }
