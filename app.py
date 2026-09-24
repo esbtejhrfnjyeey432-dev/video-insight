@@ -93,6 +93,121 @@ _analysis_cache_lock = threading.Lock()
 CREATIVE_CACHE_MAX = int(os.environ.get("VI_CREATIVE_CACHE_MAX", "10"))
 _creative_cache: dict[str, tuple[float, dict]] = {}
 
+# 付费生图体验保护：按访问者累计记录实际发起的九宫格费用，并设置全站预算。
+# 临时公开体验使用本机 JSON 存储；正式商业化应替换为登录账号 + 数据库 + 支付回调。
+GRID_FREE_LIMIT_CNY = max(0.0, float(os.environ.get("VI_GRID_FREE_LIMIT_CNY", "2.00")))
+GRID_DAILY_BUDGET_CNY = max(0.0, float(os.environ.get("VI_GRID_DAILY_BUDGET_CNY", "10.00")))
+GRID_SERVICE_FEE_CNY = max(0.0, float(os.environ.get("VI_GRID_SERVICE_FEE_CNY", "0.20")))
+GRID_USAGE_PATH = Path(os.environ.get(
+    "VI_GRID_USAGE_PATH", str(Path(tempfile.gettempdir()) / "video-insight-grid-usage.json")))
+PAYMENT_PROOF_DIR = Path(os.environ.get(
+    "VI_PAYMENT_PROOF_DIR", str(Path(tempfile.gettempdir()) / "video-insight-payment-proofs")))
+PAYMENT_ADMIN_TOKEN = os.environ.get("VI_PAYMENT_ADMIN_TOKEN", "").strip()
+_grid_usage_lock = threading.Lock()
+
+
+def _load_grid_usage() -> dict:
+    try:
+        data = json.loads(GRID_USAGE_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("clients"), dict):
+            return data
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0,
+            "clients": {}, "credits": {}, "orders": {}}
+
+
+_grid_usage = _load_grid_usage()
+
+
+def _save_grid_usage_locked() -> None:
+    try:
+        GRID_USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = GRID_USAGE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_grid_usage, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, GRID_USAGE_PATH)
+    except OSError as exc:
+        logger.warning("grid_usage_save_failed reason=%s", exc)
+
+
+def _grid_client_key(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    host = forwarded or (request.client.host if request.client else "unknown")
+    # 只按网络来源计额，换浏览器或清理本地缓存都不会重置免费额度。
+    return hashlib.sha256(host.encode("utf-8")).hexdigest()[:32]
+
+
+def _grid_model_cost(ref_count: int) -> float:
+    return round(0.18 + 0.02 * min(3, max(0, int(ref_count))), 2)
+
+
+def _grid_quote_locked(client_key: str, model_cost: float) -> dict:
+    today = time.strftime("%Y-%m-%d")
+    if _grid_usage.get("date") != today:
+        _grid_usage["date"], _grid_usage["daily_cny"] = today, 0.0
+    used = round(float((_grid_usage.get("clients") or {}).get(client_key, 0.0)), 2)
+    daily = round(float(_grid_usage.get("daily_cny") or 0.0), 2)
+    paid_credits = max(0, int((_grid_usage.get("credits") or {}).get(client_key, 0)))
+    allowed = used + model_cost <= GRID_FREE_LIMIT_CNY + 1e-9
+    global_allowed = daily + model_cost <= GRID_DAILY_BUDGET_CNY + 1e-9
+    return {
+        "allowed": bool((allowed and global_allowed) or paid_credits > 0),
+        "reason": "user_limit" if not allowed else ("daily_budget" if not global_allowed else ""),
+        "used_cny": used,
+        "remaining_cny": round(max(0.0, GRID_FREE_LIMIT_CNY - used), 2),
+        "free_limit_cny": round(GRID_FREE_LIMIT_CNY, 2),
+        "model_cost_cny": model_cost,
+        "service_fee_cny": round(GRID_SERVICE_FEE_CNY, 2),
+        "payable_cny": round(model_cost + GRID_SERVICE_FEE_CNY, 2),
+        "paid_credits": paid_credits,
+    }
+
+
+def _reserve_grid_cost(client_key: str, model_cost: float) -> dict:
+    with _grid_usage_lock:
+        quote = _grid_quote_locked(client_key, model_cost)
+        free_allowed = quote["used_cny"] + model_cost <= GRID_FREE_LIMIT_CNY + 1e-9 and \
+            float(_grid_usage.get("daily_cny") or 0.0) + model_cost <= GRID_DAILY_BUDGET_CNY + 1e-9
+        if not free_allowed and quote["paid_credits"] <= 0:
+            raise HTTPException(402, detail={
+                "code": "grid_payment_required",
+                "message": "免费体验额度已用完，请支付本次平台生成费用后联系管理员开通。",
+                **quote,
+            })
+        if free_allowed:
+            clients = _grid_usage.setdefault("clients", {})
+            clients[client_key] = round(float(clients.get(client_key, 0.0)) + model_cost, 2)
+            _grid_usage["daily_cny"] = round(float(_grid_usage.get("daily_cny", 0.0)) + model_cost, 2)
+            reservation = "free"
+        else:
+            credits = _grid_usage.setdefault("credits", {})
+            credits[client_key] = max(0, int(credits.get(client_key, 0)) - 1)
+            reservation = "credit"
+        _save_grid_usage_locked()
+        result = _grid_quote_locked(client_key, model_cost)
+        result["reservation"] = reservation
+        return result
+
+
+def _release_grid_cost(client_key: str, model_cost: float, reservation: str = "free") -> None:
+    with _grid_usage_lock:
+        if reservation == "credit":
+            credits = _grid_usage.setdefault("credits", {})
+            credits[client_key] = int(credits.get(client_key, 0)) + 1
+            _save_grid_usage_locked()
+            return
+        clients = _grid_usage.setdefault("clients", {})
+        clients[client_key] = round(max(0.0, float(clients.get(client_key, 0.0)) - model_cost), 2)
+        _grid_usage["daily_cny"] = round(max(0.0, float(_grid_usage.get("daily_cny", 0.0)) - model_cost), 2)
+        _save_grid_usage_locked()
+
+
+def _require_payment_admin(token: str) -> None:
+    if not PAYMENT_ADMIN_TOKEN:
+        raise HTTPException(503, "尚未配置付款审核口令")
+    if not hmac.compare_digest(token or "", PAYMENT_ADMIN_TOKEN):
+        raise HTTPException(403, "审核口令不正确")
+
 
 def _cache_get(key: str, store: dict | None = None) -> dict | None:
     cache = _analysis_cache if store is None else store
@@ -1041,7 +1156,7 @@ def _generate_storyboard_grid(board: dict, assets: list[dict], cfg: dict) -> dic
     if not image_url:
         raise HTTPException(502, "图片模型没有返回九宫格图片，分镜规划已保留")
     return {"image_url": image_url, "model": IMAGE_MODEL, "reference_count": len(refs),
-            "estimated_cost_cny": round(0.18 + 0.02 * len(refs), 2)}
+            "estimated_cost_cny": _grid_model_cost(len(refs))}
 
 
 ANALYSIS_MODES = {
@@ -1713,8 +1828,21 @@ async def creative_workbench(
     return final_result
 
 
+@app.post("/api/creative/storyboard-grid/quote")
+async def creative_storyboard_grid_quote(
+    request: Request,
+    payload: dict = Body(...),
+    _code: None = Depends(require_code),
+):
+    """在调用付费图片模型前返回体验余额与透明平台报价。"""
+    refs = min(3, max(0, int(payload.get("reference_count") or 0)))
+    with _grid_usage_lock:
+        return _grid_quote_locked(_grid_client_key(request), _grid_model_cost(refs))
+
+
 @app.post("/api/creative/storyboard-grid")
 async def creative_storyboard_grid(
+    request: Request,
     payload: dict = Body(...),
     _code: None = Depends(require_code),
 ):
@@ -1741,8 +1869,20 @@ async def creative_storyboard_grid(
     cached = _cache_get(cache_key, _creative_cache)
     if cached is not None:
         return _with_cache_meta(cached)
-    result = await asyncio.to_thread(
-        _generate_storyboard_grid, board, payload.get("assets") or [], cfg)
+    active_refs = [item for item in (payload.get("assets") or [])
+                   if isinstance(item, dict) and not item.get("hidden") and
+                   isinstance(item.get("image"), str) and
+                   item.get("image", "").startswith("data:image/")]
+    model_cost = _grid_model_cost(min(3, len(active_refs)))
+    client_key = _grid_client_key(request)
+    usage = _reserve_grid_cost(client_key, model_cost)
+    try:
+        result = await asyncio.to_thread(
+            _generate_storyboard_grid, board, payload.get("assets") or [], cfg)
+    except Exception:
+        _release_grid_cost(client_key, model_cost)
+        raise
+    result["usage"] = usage
     _cache_put(cache_key, result, _creative_cache)
     return result
 

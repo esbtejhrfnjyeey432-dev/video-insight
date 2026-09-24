@@ -12,6 +12,28 @@ import resolver
 
 
 class StabilityTests(unittest.TestCase):
+    def test_grid_free_experience_stops_before_exceeding_two_yuan(self):
+        state = {"date": app.time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
+        with mock.patch.object(app, "_grid_usage", state), \
+             mock.patch.object(app, "_save_grid_usage_locked"):
+            for _ in range(8):
+                app._reserve_grid_cost("visitor", 0.24)
+            self.assertAlmostEqual(state["clients"]["visitor"], 1.92)
+            with self.assertRaises(HTTPException) as caught:
+                app._reserve_grid_cost("visitor", 0.24)
+            self.assertEqual(caught.exception.status_code, 402)
+            self.assertEqual(caught.exception.detail["code"], "grid_payment_required")
+            self.assertEqual(caught.exception.detail["payable_cny"], 0.44)
+
+    def test_failed_grid_generation_releases_reserved_cost(self):
+        state = {"date": app.time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
+        with mock.patch.object(app, "_grid_usage", state), \
+             mock.patch.object(app, "_save_grid_usage_locked"):
+            app._reserve_grid_cost("visitor", 0.22)
+            app._release_grid_cost("visitor", 0.22)
+            self.assertEqual(state["clients"]["visitor"], 0.0)
+            self.assertEqual(state["daily_cny"], 0.0)
+
     def test_platform_vtt_subtitle_is_parsed_with_timestamps(self):
         parsed = resolver._parse_platform_subtitle(
             b"WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello world\n\n"

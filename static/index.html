@@ -133,6 +133,7 @@
   .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(91,92,226,.1)}
   .note{font-size:12px;color:var(--muted);background:#f6f8fa;border-radius:8px;padding:8px 12px;margin-bottom:14px}
   .modal .btns{justify-content:flex-end;display:flex;gap:10px;margin-top:6px}
+  .pay-modal{text-align:center;max-width:410px}.pay-modal img{display:block;width:min(100%,280px);max-height:360px;object-fit:contain;margin:16px auto;border:1px solid var(--line);border-radius:14px}.pay-total{font-size:26px;font-weight:800;color:var(--blue-d);margin:8px 0}.pay-detail{font-size:12px;color:var(--muted);line-height:1.7}.pay-note{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--amber-l);color:var(--amber);font-size:13px;text-align:left}
   .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:10px 22px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:99}
   .toast.show{opacity:.95}
   .gate{display:none;position:fixed;inset:0;background:rgba(246,248,249,.97);z-index:80;align-items:center;justify-content:center}
@@ -475,6 +476,17 @@
     </div>
   </div>
 </div>
+<div class="modal-mask" id="gridPayMask" role="dialog" aria-modal="true" aria-labelledby="gridPayTitle">
+  <div class="modal pay-modal">
+    <h3 id="gridPayTitle">免费体验额度已用完</h3>
+    <p>如需继续生成本组二创九宫格，请支付本次平台生成费用。</p>
+    <div class="pay-total" id="gridPayTotal">¥0.00</div>
+    <div class="pay-detail" id="gridPayDetail">报价包含模型资源成本与平台处理服务费。</div>
+    <img src="/wechat-pay.jpg" alt="微信收款码">
+    <div class="pay-note">付款后请联系网站管理员，并提供付款截图，由管理员人工开通继续使用。</div>
+    <div class="btns"><button type="button" id="btnGridPayClose">暂不生成</button></div>
+  </div>
+</div>
 <div class="gate" id="gate">
   <div class="gcard">
     <div class="glogo"><span class="dot" style="width:12px;height:12px;border-radius:3px;background:var(--blue);display:inline-block"></span>VideoInsight</div>
@@ -541,6 +553,14 @@ function toast(msg){
   var t = $("toast"); t.textContent = msg; t.classList.add("show");
   setTimeout(function(){ t.classList.remove("show"); }, 2600);
 }
+function showGridPayment(quote){
+  quote=quote||{};
+  $("gridPayTotal").textContent="¥"+Number(quote.payable_cny||0).toFixed(2);
+  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台处理服务费 ¥"+Number(quote.service_fee_cny||0.2).toFixed(2)+"。";
+  $("gridPayMask").style.display="flex";
+}
+$("btnGridPayClose").onclick=function(){ $("gridPayMask").style.display="none"; };
+$("gridPayMask").onclick=function(e){ if(e.target===this)this.style.display="none"; };
 function showErr(msg, canRetry){
   var e = $("errBox"); e.innerHTML = "";
   var text = document.createElement("div"); text.textContent = msg; e.appendChild(text);
@@ -1358,18 +1378,25 @@ function renderStoryboard(rows){
     while(cells.length<9)cells.push('<div class="plan-cell empty">画面缺失<br>请重新生成</div>');
     var complete=panels.length===9,meta='<span class="plan-grid-meta">'+esc(x.time||"")+' · '+panels.length+'/9 格'+(complete?' · 完整':' · 不完整')+'</span>';
     var generated=x.generated_grid_url?'<div class="generated-grid"><img src="'+esc(x.generated_grid_url)+'" alt="第 '+esc(x.group||index+1)+' 组二创九宫格"><div class="grid-caption"><span>第 '+esc(x.group||index+1)+' 组 · 二创九宫格</span><a href="'+esc(x.generated_grid_url)+'" target="_blank" rel="noopener">查看 / 保存原图</a></div></div>':'';
-    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'预计 ¥0.18～0.24，确认后调用百炼':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
+    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'每位访客累计可免费体验 ¥2.00，生成前核算余额':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
   }).join("")+'</div>';
   $("storyboardOutput").innerHTML=table+grids;
   document.querySelectorAll("[data-generate-grid]").forEach(function(button){button.onclick=function(){
     var index=Number(button.dataset.generateGrid),board=creativeWorkspace.storyboard[index];if(!board)return;
-    var refs=creativeWorkspace.assets.filter(function(x){return !x.hidden;}).length,estimate=(.18+.02*Math.min(3,refs)).toFixed(2);
-    if(!confirm("将调用百炼生成 1 张二创九宫格。预估费用约 ¥"+estimate+"（有免费额度时可能不扣费），是否继续？"))return;
-    button.disabled=true;button.textContent="九宫格生成中…";
-    api("/api/creative/storyboard-grid",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({storyboard:board,assets:creativeWorkspace.assets})})
-      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"九宫格生成失败");return j;});})
+    var refs=creativeWorkspace.assets.filter(function(x){return !x.hidden&&/^data:image\//.test(x.image||"");}).length;
+    button.disabled=true;button.textContent="正在核算体验额度…";
+    api("/api/creative/storyboard-grid/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reference_count:Math.min(3,refs)})})
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"额度核算失败");return j;});})
+      .then(function(quote){
+        if(!quote.allowed){showGridPayment(quote);throw {paymentRequired:true};}
+        var message="本次预计使用体验额度 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+"，生成后预计剩余 ¥"+Math.max(0,Number(quote.remaining_cny||0)-Number(quote.model_cost_cny||0)).toFixed(2)+"。是否继续？";
+        if(!confirm(message))throw {cancelled:true};
+        button.textContent="九宫格生成中…";
+        return api("/api/creative/storyboard-grid",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({storyboard:board,assets:creativeWorkspace.assets})});
+      })
+      .then(function(r){return r.json().then(function(j){if(!r.ok){if(r.status===402&&j.detail){showGridPayment(j.detail);throw {paymentRequired:true};}throw new Error(j.detail||"九宫格生成失败");}return j;});})
       .then(function(j){board.generated_grid_url=j.image_url;renderStoryboard(creativeWorkspace.storyboard);toast("二创九宫格已生成");})
-      .catch(function(e){button.disabled=false;button.textContent="重新生成本组九宫格";toast(e.message||"九宫格生成失败，分镜规划已保留");});
+      .catch(function(e){button.disabled=false;button.textContent="生成本组二创九宫格";if(!e.paymentRequired&&!e.cancelled)toast(e.message||"九宫格生成失败，分镜规划已保留");});
   };});
   $("storyboardPanel").style.display="block";setWorkbenchStep(4);$("storyboardPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }

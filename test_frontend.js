@@ -85,5 +85,9 @@ assert(html.includes('id="btnPpt" data-course-only="1"'),
   "PPTX export should be marked as course-only");
 assert(html.includes('scenario === "course" ? "inline-block" : "none"'),
   "PPTX export should be hidden for creative reports");
+assert(html.includes('id="gridPayMask"') && html.includes('/api/creative/storyboard-grid/quote'),
+  "Paid grid generation must check the server-side experience allowance first");
+assert(html.includes("平台处理服务费") && html.includes('id="gridPayTotal"'),
+  "Grid payment quote must disclose the service fee and total payable amount");
 
 console.log("Frontend feature tests OK");
