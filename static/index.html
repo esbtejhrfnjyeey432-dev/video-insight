@@ -579,7 +579,7 @@ function showGridPayment(quote,refs){
   $("gridPayConfirm").style.display="block";
   $("gridPayScan").style.display="none";
   $("gridPayTotal").textContent="¥"+gridPayAmount.toFixed(2);
-  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台服务费 ¥"+Number(quote.service_fee_cny||0.1).toFixed(2);
+  $("gridPayDetail").textContent="模型资源成本 ¥"+Number(quote.model_cost_cny||0).toFixed(2)+" + 平台处理服务费 ¥"+Number(quote.service_fee_cny||0.1).toFixed(2);
   $("gridPayOrder").textContent="创建中…";
   $("gridPayStatus").textContent="";
   var go=$("btnGridPayGo");go.disabled=true;go.textContent="立即支付";
@@ -1431,7 +1431,7 @@ function renderStoryboard(rows){
     while(cells.length<9)cells.push('<div class="plan-cell empty">画面缺失<br>请重新生成</div>');
     var complete=panels.length===9,meta='<span class="plan-grid-meta">'+esc(x.time||"")+' · '+panels.length+'/9 格'+(complete?' · 完整':' · 不完整')+'</span>';
     var generated=x.generated_grid_url?'<div class="generated-grid"><img src="'+esc(x.generated_grid_url)+'" alt="第 '+esc(x.group||index+1)+' 组二创九宫格"><div class="grid-caption"><span>第 '+esc(x.group||index+1)+' 组 · 二创九宫格</span><a href="'+esc(x.generated_grid_url)+'" target="_blank" rel="noopener">查看 / 保存原图</a></div></div>':'';
-    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'每位访客累计可免费体验 ¥2.00，生成前核算余额':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
+    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'每位访客累计可免费体验 ¥1.00，生成前核算余额':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
   }).join("")+'</div>';
   $("storyboardOutput").innerHTML=table+grids;
   document.querySelectorAll("[data-generate-grid]").forEach(function(button){button.onclick=function(){

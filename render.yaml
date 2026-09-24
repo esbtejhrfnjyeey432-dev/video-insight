@@ -42,9 +42,9 @@ services:
         value: "2"
       - key: VI_QUEUE_TIMEOUT
         value: "60"
-      # 二创九宫格属于付费生图：每位访客累计体验 2 元，并设全站每日预算兜底。
+      # 二创九宫格属于付费生图：每位访客累计体验 1 元，并设全站每日预算兜底。
       - key: VI_GRID_FREE_LIMIT_CNY
-        value: "2.00"
+        value: "1.00"
       - key: VI_GRID_DAILY_BUDGET_CNY
         value: "10.00"
       - key: VI_GRID_SERVICE_FEE_CNY

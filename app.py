@@ -96,7 +96,7 @@ _creative_cache: dict[str, tuple[float, dict]] = {}
 
 # 付费生图体验保护：按访问者累计记录实际发起的九宫格费用，并设置全站预算。
 # 临时公开体验使用本机 JSON 存储；正式商业化应替换为登录账号 + 数据库 + 支付回调。
-GRID_FREE_LIMIT_CNY = max(0.0, float(os.environ.get("VI_GRID_FREE_LIMIT_CNY", "2.00")))
+GRID_FREE_LIMIT_CNY = max(0.0, float(os.environ.get("VI_GRID_FREE_LIMIT_CNY", "1.00")))
 GRID_DAILY_BUDGET_CNY = max(0.0, float(os.environ.get("VI_GRID_DAILY_BUDGET_CNY", "10.00")))
 GRID_SERVICE_FEE_CNY = max(0.0, float(os.environ.get("VI_GRID_SERVICE_FEE_CNY", "0.10")))
 GRID_USAGE_PATH = Path(os.environ.get(

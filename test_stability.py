@@ -17,25 +17,25 @@ class StabilityTests(unittest.TestCase):
     def test_grid_quota_links_device_and_network_identity(self):
         state = {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0,
                  "clients": {}, "credits": {}, "orders": {}}
-        quota_identity.reserve(state, ["dev:a", "net:one"], 1.8, 2.0, 10.0, 0.2)
-        quote = quota_identity.quote(state, ["dev:b", "net:one"], 0.22, 2.0, 10.0, 0.2)
+        quota_identity.reserve(state, ["dev:a", "net:one"], 0.8, 1.0, 10.0, 0.2)
+        quote = quota_identity.quote(state, ["dev:b", "net:one"], 0.22, 1.0, 10.0, 0.2)
         self.assertFalse(quote["allowed"])
-        self.assertEqual(quote["used_cny"], 1.8)
-        quote = quota_identity.quote(state, ["dev:a", "net:two"], 0.22, 2.0, 10.0, 0.2)
+        self.assertEqual(quote["used_cny"], 0.8)
+        quote = quota_identity.quote(state, ["dev:a", "net:two"], 0.22, 1.0, 10.0, 0.2)
         self.assertFalse(quote["allowed"])
 
-    def test_grid_free_experience_stops_before_exceeding_two_yuan(self):
+    def test_grid_free_experience_stops_before_exceeding_one_yuan(self):
         state = {"date": app.time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
         with mock.patch.object(app, "_grid_usage", state), \
              mock.patch.object(app, "_save_grid_usage_locked"):
-            for _ in range(8):
+            for _ in range(4):
                 app._reserve_grid_cost("visitor", 0.24)
-            self.assertAlmostEqual(state["clients"]["visitor"], 1.92)
+            self.assertAlmostEqual(state["clients"]["visitor"], 0.96)
             with self.assertRaises(HTTPException) as caught:
                 app._reserve_grid_cost("visitor", 0.24)
             self.assertEqual(caught.exception.status_code, 402)
             self.assertEqual(caught.exception.detail["code"], "grid_payment_required")
-            self.assertEqual(caught.exception.detail["payable_cny"], 0.44)
+            self.assertEqual(caught.exception.detail["payable_cny"], 0.34)
 
     def test_failed_grid_generation_releases_reserved_cost(self):
         state = {"date": app.time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
