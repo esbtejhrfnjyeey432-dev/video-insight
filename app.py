@@ -66,6 +66,12 @@ ACCESS_CODE = os.environ.get("VI_ACCESS_CODE", "").strip()
 DEPLOY_MODE = bool(ENV_API_KEY)  # 服务端注入 Key 即视为公开部署模式
 DAILY_LIMIT = int(os.environ.get("VI_DAILY_LIMIT", "20"))  # 部署模式：每天最多解析次数
 _usage: dict = {}  # {访问码: [日期, 已用次数]} · 防止访问码外泄后被刷爆额度
+# 每日 API 消耗金额上限（元）——测试期统一总闸。按估算成本累计所有烧 Key 的调用
+# （分析、拆解、脚本、分镜、提示词、连贯修复、九宫格生图），超过即拒绝。
+# 值为估算非精确计费，测试够了以后改这一个数字即可。
+DAILY_COST_LIMIT_CNY = max(0.0, float(os.environ.get("VI_DAILY_COST_CNY", "5.00")))
+_daily_cost_state: dict = {"date": time.strftime("%Y-%m-%d"), "cny": 0.0}
+_daily_cost_lock = threading.Lock()
 # 并发分池：轻任务（本地/浏览器抽帧）允许多人并行；重任务（远程下载、全片拆解）
 # 限制并发防止免费层 OOM。所有请求彼此独立（临时目录/令牌隔离），互不覆盖。
 MAX_LINK_CONCURRENT = max(1, int(os.environ.get("VI_MAX_LINK_CONCURRENT", "2")))
@@ -510,6 +516,28 @@ def check_daily_usage():
     if rec[1] >= DAILY_LIMIT:
         raise HTTPException(429, f"今日解析次数已达上限（每天 {DAILY_LIMIT} 次），明天再来吧～")
     rec[1] += 1
+
+
+def _analysis_cost_estimate(mode: str, with_asr: bool = False) -> float:
+    """估算一次视觉分析的模型成本（元）。不精确，仅用于每日总额兜底。"""
+    m = str(mode or "standard").lower()
+    base = 0.30 if m == "deep" else (0.08 if m == "quick" else 0.15)
+    return round(base + (0.10 if with_asr else 0.0), 2)
+
+
+def charge_daily_cost(amount: float):
+    """按估算金额累计每日 API 消耗；超过测试上限则拒绝，防止刷爆 Key。"""
+    if not DEPLOY_MODE or DAILY_COST_LIMIT_CNY <= 0:
+        return
+    amount = max(0.0, float(amount or 0.0))
+    with _daily_cost_lock:
+        today = time.strftime("%Y-%m-%d")
+        if _daily_cost_state["date"] != today:
+            _daily_cost_state["date"], _daily_cost_state["cny"] = today, 0.0
+        if _daily_cost_state["cny"] + amount > DAILY_COST_LIMIT_CNY + 1e-9:
+            raise HTTPException(
+                429, "今日 API 消耗已达测试上限（约 ¥%.2f），明天再来试试吧" % DAILY_COST_LIMIT_CNY)
+        _daily_cost_state["cny"] = round(_daily_cost_state["cny"] + amount, 2)
 
 
 def save_config(cfg: dict) -> None:
@@ -1881,6 +1909,7 @@ async def agent_workbench(
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key")
+    charge_daily_cost(0.05)  # 质检 / 连贯修复 / 裂变：单次文本调用
     snapshot = {
         "analysis": _analysis_for_agent(payload.get("analysis") or {}),
         "requirements": str(workbench.get("requirements") or "")[:3000],
@@ -1957,6 +1986,7 @@ async def creative_deconstruct(
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key")
+    charge_daily_cost(0.60)  # 拆镜理解含 ASR + 多次模型调用，最重的一步
     tmpdir = tempfile.mkdtemp(prefix="vinsight_creative_")
     audio_path = os.path.join(tmpdir, "track.mp3")
     token = uuid.uuid4().hex
@@ -2118,6 +2148,7 @@ async def creative_workbench(
     phase = str(payload.get("phase") or "")
     if phase not in {"script", "storyboard", "prompts"}:
         raise HTTPException(400, "不支持的生成阶段")
+    charge_daily_cost(0.10 if phase in {"script", "storyboard"} else 0.05)
     cache_key = "workbench:" + hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -2955,6 +2986,7 @@ async def analyze(
         if not frames:
             raise HTTPException(500, "视频抽帧失败：请确认文件是可播放的视频格式（mp4 / mov / webm 等）")
         check_daily_usage()  # 真正要调用大模型了才计数
+        charge_daily_cost(_analysis_cost_estimate(mode, bool(transcript)))
         mode, _ = _analysis_context(mode)
         scenario, _ = _scenario_context(scenario)
         analysis = await asyncio.to_thread(
@@ -3031,6 +3063,7 @@ async def analyze_frames(
     analysis_slots = await acquire_analysis_slot("frames")
     try:
         check_daily_usage()
+        charge_daily_cost(_analysis_cost_estimate(mode, False))
         analysis = await asyncio.to_thread(
             call_qwen, encoded, cfg, duration, mode, "", scenario)
         analysis["_meta"] = {
