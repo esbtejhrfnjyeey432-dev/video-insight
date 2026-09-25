@@ -2715,13 +2715,20 @@ async def payment_review(payload: dict = Body(...)):
 
 
 def readiness_checks() -> dict:
-    """Check dependencies required to accept real analysis traffic."""
+    """Check dependencies required to accept real analysis traffic.
+
+    payment_store 失败只作为信息项展示，不计入 ready 判定：
+    数据库未就绪时付款接口自行降级报错，但解析主流程必须照常服务，
+    否则健康检查 503 会让整个部署被 Render 回滚。
+    """
     payment_store_ready = True
     if PAYMENT_REQUIRE_DURABLE:
         try:
             _require_durable_payment_store()
         except HTTPException:
             payment_store_ready = False
+            logger.warning("durable_payment_store_unreachable — "
+                           "付款接口将不可用，解析主流程不受影响")
     return {
         "api_key": bool(load_config().get("api_key")),
         "ffmpeg": bool(FFMPEG and os.path.isfile(FFMPEG)),

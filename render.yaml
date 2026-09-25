@@ -54,8 +54,10 @@ services:
         fromDatabase:
           name: video-insight-payments
           property: connectionString
+      # 数据库未创建时先降级为文件存储，付款功能仍可用（重启不保留）；
+      # 在 Render 上完成 Blueprint 同步、数据库就绪后再改回 "true"。
       - key: VI_REQUIRE_DURABLE_PAYMENT_STORE
-        value: "true"
+        value: "false"
       # 九宫格付款审核后台口令：敏感值，在 Render 网页填写（不要写进公开仓库）
       - key: VI_PAYMENT_ADMIN_TOKEN
         sync: false
