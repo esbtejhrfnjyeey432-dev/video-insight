@@ -16,8 +16,8 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 打包全部 Python 模块（app/resolver/quota_identity/payment_store 及后续新增），
-# 避免新增模块后忘记同步 COPY 再次出现 ModuleNotFoundError。
+# Copy every Python module (app, resolver, quota_identity, payment_store and
+# any future ones) so a newly added module can never be missing in the image.
 COPY --chown=appuser:appuser *.py ./
 COPY --chown=appuser:appuser static ./static
 
