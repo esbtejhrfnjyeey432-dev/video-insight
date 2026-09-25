@@ -57,13 +57,18 @@ function loadOrders(){
       var orders=j.orders||[];
       list.innerHTML=orders.length?orders.map(function(o){
         var proofBtn=o.proof?'<button onclick="toggleProof(\''+o.order_id+'\')">查看截图</button>':'<span class="meta">未上传截图</span>';
+        var ar=o.auto_review||{},agent=o.proof?'<div class="meta">Agent：'+
+          (ar.verified?'自动核验通过':'转人工')+' · 置信度 '+Number(ar.confidence||0).toFixed(2)+
+          (ar.amount!=null?' · 识别金额 ¥'+Number(ar.amount).toFixed(2):'')+
+          (ar.order_id?' · 识别订单 '+esc(ar.order_id):'')+
+          (ar.reason?' · '+esc(ar.reason):'')+(ar.evidence_note?' · 识别说明：'+esc(ar.evidence_note):'')+'</div>':'';
         var act=(o.status==="pending"||o.status==="reviewing")?
           '<button class="ok" onclick="review(\''+o.order_id+'\',\'approve\')">核对无误，开通</button>'+
           '<button class="no" onclick="review(\''+o.order_id+'\',\'reject\')">拒绝</button>':"";
         return '<div class="card"><div class="head"><div><span class="oid">'+esc(o.order_id)+'</span>'+
           ' <span class="status s-'+esc(o.status)+'">'+esc(o.status)+'</span></div>'+
           '<div class="amount">¥'+Number(o.amount_cny||0).toFixed(2)+'</div></div>'+
-          '<div class="meta">创建：'+esc(o.created||"")+(o.reviewed?' · 审核：'+esc(o.reviewed):"")+'</div>'+
+          '<div class="meta">创建：'+esc(o.created||"")+(o.reviewed?' · 审核：'+esc(o.reviewed)+(o.reviewer?'（'+esc(o.reviewer)+'）':''):"")+'</div>'+agent+
           '<div class="actions">'+proofBtn+act+'</div>'+
           '<img class="proof" id="proof-'+esc(o.order_id)+'" alt="付款截图"></div>'
       }).join(""):'<div class="card empty">还没有付款订单</div>';

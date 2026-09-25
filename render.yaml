@@ -49,9 +49,28 @@ services:
         value: "10.00"
       - key: VI_GRID_SERVICE_FEE_CNY
         value: "0.10"
+      # 订单、额度和付款截图存 PostgreSQL，Render 重启不会丢失。
+      - key: DATABASE_URL
+        fromDatabase:
+          name: video-insight-payments
+          property: connectionString
+      - key: VI_REQUIRE_DURABLE_PAYMENT_STORE
+        value: "true"
       # 九宫格付款审核后台口令：敏感值，在 Render 网页填写（不要写进公开仓库）
       - key: VI_PAYMENT_ADMIN_TOKEN
         sync: false
+      - key: VI_PAYMENT_AUTO_REVIEW
+        value: "true"
+      - key: VI_PAYMENT_REVIEW_MODEL
+        value: "qwen3-vl-plus"
       # 生产环境关闭内部解析诊断接口，避免被滥用为下载器或网络探针
       - key: VI_ENABLE_DEBUG
         value: "false"
+
+databases:
+  - name: video-insight-payments
+    # 联调可先用 free；正式收款前必须升级为长期有效规格（最低 0.1c-256mb）。
+    plan: free
+    region: singapore
+    databaseName: video_insight
+    user: video_insight

@@ -882,7 +882,12 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
                             base_analysis: dict | None = None) -> dict:
     compact = [{k: item.get(k) for k in ("start_ms", "end_ms", "speaker", "text")}
                for item in transcript[:1200]]
-    prompt = """你是短剧情原片分析导演。结合按时间排列的关键帧、字幕和已有基础分析，重新完成可核验的结构化理解，不得只复制基础分析。逐条校准说话人：SRT/ASR明确人物、清晰可见的口型对应或连续对话关系可以作为证据；直接证据充分时 confidence 应为0.90到0.99，只有弱上下文时为0.60到0.89，无法判断才写“待确认”且低于0.60。必须结合画面和台词填写前三秒、核心冲突、节奏和有效原因，不得在已有画面/台词证据时返回空字符串。只输出 JSON：
+    if len(shots) <= 12:
+        primary_shots = list(shots)
+    else:
+        indexes = sorted({round(i * (len(shots) - 1) / 11) for i in range(12)})
+        primary_shots = [shots[index] for index in indexes]
+    prompt = """你是短剧情原片分析导演。结合按时间排列且均匀覆盖全片的关键帧、字幕和已有基础分析，重新完成可核验的结构化理解，不得只复制基础分析。逐条校准说话人：SRT/ASR明确人物、清晰可见的口型对应或连续对话关系可以作为证据；直接证据充分时 confidence 应为0.90到0.99，只有弱上下文时为0.60到0.89，无法判断才写“待确认”且低于0.60。必须结合画面和台词填写前三秒、核心冲突、节奏和有效原因，不得在已有画面/台词证据时返回空字符串。只输出 JSON：
 {"speaker_calibration":[{"start_ms":0,"end_ms":1000,"speaker":"人物A/旁白/待确认","text":"","confidence":0.0,"evidence":"画面口型/SRT标注/仅上下文推断"}],
 "characters":[{"id":"char-1","name":"人物A","identity":"","personality":"","appearance":"","wardrobe_by_unit":[{"unit":"剧情单元1","wardrobe":""}]}],
 "relationships":[{"from":"char-1","to":"char-2","relationship":"","changes":""}],
@@ -892,8 +897,8 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
 "product_placements":[{"time_range":"","product":"","method":"","plot_function":""}],
 "appeal_logic":{"first_3_seconds":"","conflict":"","payoffs":[],"pace":"","why_it_works":""},
 "review_required":["需要人工确认的说话人或事实"]}。
-每个剧情单元的 emotion_changes 和 transition 均为必填；每张参考关键帧都必须在 shot_analysis 中给出景别、构图、动作和实用价值。已有基础分析：""" + json.dumps(_analysis_for_agent(base_analysis or {}), ensure_ascii=False)[:10000] + "\n镜头索引：" + json.dumps([{"shot": x.get("shot"), "start": x.get("start"), "end": x.get("end")} for x in shots[:12]], ensure_ascii=False) + "\n字幕数据：" + json.dumps(compact, ensure_ascii=False)[:34000]
-    images = [item.get("image", "") for item in shots[:12]]
+每个剧情单元的 emotion_changes 和 transition 均为必填；每张参考关键帧都必须在 shot_analysis 中给出景别、构图、动作和实用价值。已有基础分析：""" + json.dumps(_analysis_for_agent(base_analysis or {}), ensure_ascii=False)[:10000] + "\n镜头索引：" + json.dumps([{"shot": x.get("shot"), "start": x.get("start"), "end": x.get("end")} for x in primary_shots], ensure_ascii=False) + "\n字幕数据：" + json.dumps(compact, ensure_ascii=False)[:34000]
+    images = [item.get("image", "") for item in primary_shots]
     # 原片理解一次要看 12 张图并输出长结构化 JSON，属于最重的视觉调用，
     # 给 180 秒余量；宁可慢也不能降级成空壳理解。
     result = _creative_asset_prompt(prompt, images, cfg, timeout=180)
@@ -904,7 +909,48 @@ def _creative_understanding(shots: list[dict], transcript: list[dict], cfg: dict
     if incomplete:
         repair = prompt + "\n上一次结果缺少情绪、剧情承接或原片景别分析。请重新输出完整 JSON；这些字段不得为空。"
         result = _creative_asset_prompt(repair, images[:6], cfg, timeout=180)
+    # 首轮最多查看 12 张均匀样本；其余镜头按小批量并行补齐视觉字段。
+    # 这样长视频不会出现“前面有分析、后面全部待识别”。
+    existing = {int(item.get("shot") or 0): item
+                for item in (result.get("shot_analysis") or [])
+                if isinstance(item, dict) and item.get("shot")}
+    missing = [shot for shot in shots if int(shot.get("shot") or 0) not in existing]
+    batches = [missing[index:index + 10] for index in range(0, len(missing), 10)]
+    if batches:
+        workers = min(3, len(batches))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_analyze_shot_feature_batch, batch, cfg)
+                       for batch in batches]
+            for future in futures:
+                try:
+                    for item in future.result():
+                        if isinstance(item, dict) and item.get("shot"):
+                            existing[int(item["shot"])] = item
+                except Exception as exc:
+                    logger.warning("shot_feature_batch_failed reason=%s", type(exc).__name__)
+    result["shot_analysis"] = [existing[number] for number in sorted(existing)]
     return result
+
+
+def _analyze_shot_feature_batch(shots: list[dict], cfg: dict) -> list[dict]:
+    """仅分析一小批镜头的可拍摄视觉字段，避免重复生成全片剧情理解。"""
+    indexes = [{"shot": item.get("shot"), "start": item.get("start"),
+                "end": item.get("end")} for item in shots]
+    prompt = """你是影视镜头分析员。下列图片与镜头索引严格一一对应。逐张观察并返回全部镜头，不得漏项，不得使用“待识别”“未知”或空字符串。景别只能从远景/全景/中景/近景/特写中选择；构图写人物或主体位置及画面关系；动作写当前画面确实可见的动作或状态；参考价值写该镜头对二创拍摄可直接复用的构图、动作或氛围特点。不要猜测画外内容。只输出 JSON：{"shot_analysis":[{"shot":1,"shot_size":"近景","composition":"人物居中，手机位于画面右侧","action":"人物低头查看手机","visual_value":"用手机特写承接来电冲突"}]}。
+镜头索引：""" + json.dumps(indexes, ensure_ascii=False)
+    result = _creative_asset_prompt(
+        prompt, [item.get("image", "") for item in shots], cfg,
+        max_tokens=max(1400, len(shots) * 220), attempts=2, timeout=150)
+    rows = [item for item in (result.get("shot_analysis") or [])
+            if isinstance(item, dict)]
+    expected = {int(item.get("shot") or 0) for item in shots}
+    valid = {int(item.get("shot") or 0): item for item in rows
+             if int(item.get("shot") or 0) in expected and
+             all(str(item.get(key) or "").strip() for key in
+                 ("shot_size", "composition", "action", "visual_value"))}
+    if set(valid) != expected:
+        raise HTTPException(502, "部分镜头视觉字段缺失")
+    return [valid[number] for number in sorted(valid)]
 
 
 def _understanding_from_analysis(analysis: dict, transcript: list[dict]) -> dict:
@@ -1730,9 +1776,17 @@ def _workbench_audit(workbench: dict) -> dict:
 
     has_deconstruction = bool(deconstruction.get("shots") or
                               deconstruction.get("understanding"))
-    add("原片理解", has_deconstruction,
-        "已具备原片结构" if has_deconstruction else "尚未完成原片拆解",
-        "先完成原片理解")
+    understanding_data = deconstruction.get("understanding") or {}
+    has_understanding = bool(understanding_data.get("story_units") or
+                             understanding_data.get("shot_analysis"))
+    if has_understanding:
+        add("原片理解", True, "已具备原片拆解与剧情理解")
+    elif has_deconstruction:
+        add("原片理解", False,
+            "已完成镜头拆解；深层剧情理解尚未完成，人物关系与剧情单元暂缺",
+            "回到第 01 步重新理解原片，补充剧情结构")
+    else:
+        add("原片理解", False, "尚未完成原片拆解", "先完成原片理解")
     requirements = str(workbench.get("requirements") or "")
     needs_assets = bool(re.search(r"换人物|人物替换|换产品|产品替换|换场景|场景替换",
                                   requirements))

@@ -93,6 +93,14 @@ uvicorn app:app --host 0.0.0.0 --port 8765
 
 需要把源码发给别人时，不要直接压缩整个工作目录。运行 `powershell -ExecutionPolicy Bypass -File scripts/build-safe-release.ps1` 生成安全源码包；它只包含已提交文件，不会带入本地配置、Cookie、下载视频、日志或 Git 历史。
 
+### 付款截图自动预审
+
+设置 `VI_PAYMENT_AUTO_REVIEW=true` 后，用户上传付款截图时会由视觉模型盲提取支付状态、实付金额和备注中的完整订单号。三项与服务端订单完全一致且置信度至少为 0.98 时自动发放一次生成额度，否则保留在人工审核队列。`VI_PAYMENT_REVIEW_MODEL` 可指定识别模型，默认 `qwen3-vl-plus`。相同截图不能用于不同订单，批准操作也按订单幂等。
+
+截图预审只能核验图片中可见的信息，不能证明真实到账或识别精心伪造的截图；正式商业化仍应以支付渠道的签名回调和主动查单为准。
+
+订单、免费额度、已购买次数和付款截图在生产环境统一写入 PostgreSQL（`DATABASE_URL`）；本地未配置数据库时才使用 JSON/文件。Render 环境默认要求持久化存储可用，否则付款接口返回维护提示，不会接受新订单。Blueprint 中的免费 PostgreSQL 仅用于联调且 30 天后到期，正式收款前必须在 Render 将数据库升级为长期有效的付费规格，或改接其他长期 PostgreSQL。
+
 ## 后续规划
 
 - 音轨转写（ASR）补充语音内容理解
