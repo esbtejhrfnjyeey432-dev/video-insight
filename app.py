@@ -27,11 +27,12 @@ import requests
 import imageio_ffmpeg
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import resolver
 import quota_identity
+from payment_store import PaymentStore
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -103,21 +104,24 @@ GRID_USAGE_PATH = Path(os.environ.get(
     "VI_GRID_USAGE_PATH", str(Path(tempfile.gettempdir()) / "video-insight-grid-usage.json")))
 PAYMENT_PROOF_DIR = Path(os.environ.get(
     "VI_PAYMENT_PROOF_DIR", str(Path(tempfile.gettempdir()) / "video-insight-payment-proofs")))
+PAYMENT_DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+PAYMENT_REQUIRE_DURABLE = os.environ.get(
+    "VI_REQUIRE_DURABLE_PAYMENT_STORE", "true" if os.environ.get("RENDER") else "false"
+).strip().lower() in ("1", "true", "yes", "on")
 PAYMENT_ADMIN_TOKEN = os.environ.get("VI_PAYMENT_ADMIN_TOKEN", "").strip()
+PAYMENT_AUTO_REVIEW = os.environ.get("VI_PAYMENT_AUTO_REVIEW", "true").strip().lower() in \
+    ("1", "true", "yes", "on")
+PAYMENT_REVIEW_MODEL = os.environ.get("VI_PAYMENT_REVIEW_MODEL", "qwen3-vl-plus").strip()
 SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
 PAYMENT_ADMIN_URL = os.environ.get(
     "VI_PAYMENT_ADMIN_URL", "https://video-insight-9q9i.onrender.com/payment-admin.html").strip()
 _grid_usage_lock = threading.Lock()
+PAYMENT_STORE = PaymentStore(PAYMENT_DATABASE_URL, GRID_USAGE_PATH, PAYMENT_PROOF_DIR)
 
 
 def _load_grid_usage() -> dict:
-    try:
-        data = json.loads(GRID_USAGE_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("clients"), dict):
-            return data
-    except (OSError, ValueError, TypeError):
-        pass
-    return {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
+    default = {"date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}}
+    return PAYMENT_STORE.load_state(default)
 
 
 _grid_usage = _load_grid_usage()
@@ -125,12 +129,27 @@ _grid_usage = _load_grid_usage()
 
 def _save_grid_usage_locked() -> None:
     try:
-        GRID_USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = GRID_USAGE_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(_grid_usage, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, GRID_USAGE_PATH)
-    except OSError as exc:
+        PAYMENT_STORE.state_path = GRID_USAGE_PATH
+        PAYMENT_STORE.save_state(_grid_usage)
+    except Exception as exc:
         logger.warning("grid_usage_save_failed reason=%s", exc)
+        if PAYMENT_REQUIRE_DURABLE:
+            raise RuntimeError("付款数据持久化暂不可用") from exc
+
+
+def _require_durable_payment_store() -> None:
+    """Never accept money on Render unless orders and proof images are durable."""
+    if PAYMENT_REQUIRE_DURABLE and not PAYMENT_STORE.durable_available():
+        logger.error("durable_payment_store_unavailable reason=%s", PAYMENT_STORE.last_error)
+        raise HTTPException(503, "付款服务正在安全维护，请稍后再试；不会生成或丢失订单。")
+    if PAYMENT_REQUIRE_DURABLE and not PAYMENT_STORE.state_loaded_durable:
+        with _grid_usage_lock:
+            restored = PAYMENT_STORE.load_state({
+                "date": time.strftime("%Y-%m-%d"), "daily_cny": 0.0, "clients": {}})
+            if not PAYMENT_STORE.state_loaded_durable:
+                raise HTTPException(503, "付款服务正在恢复订单数据，请稍后再试。")
+            _grid_usage.clear()
+            _grid_usage.update(restored)
 
 
 def _grid_client_key(request: Request) -> str:
@@ -173,7 +192,7 @@ def _reserve_grid_cost(client_key: str, model_cost: float) -> dict:
         if not free_allowed and quote["paid_credits"] <= 0:
             raise HTTPException(402, detail={
                 "code": "grid_payment_required",
-                "message": "免费体验额度已用完，请支付本次平台生成费用后联系管理员开通。",
+                "message": "免费体验额度已用完，完成本次付款核验后即可继续生成。",
                 **quote,
             })
         if free_allowed:
@@ -224,6 +243,55 @@ def _notify_payment_order(order: dict) -> None:
             "short": f"订单 {order['order_id']} 待审核"}, timeout=12)
     except requests.RequestException as exc:
         logger.warning("payment_notify_failed reason=%s", exc)
+
+
+def _grant_payment_credit_locked(order: dict, reviewer: str) -> bool:
+    """Idempotently approve one order and grant exactly one generation credit."""
+    if order.get("status") == "approved":
+        return False
+    order["status"] = "approved"
+    order["reviewed"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    order["reviewer"] = reviewer
+    credits = _grid_usage.setdefault("credits", {})
+    for key in order.get("keys") or []:
+        credits[key] = int(credits.get(key, 0)) + 1
+    return True
+
+
+def _analyze_payment_proof(raw: bytes, content_type: str, order: dict) -> dict:
+    """OCR a payment screenshot. This checks visible evidence, not actual settlement."""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(503, "未配置付款截图识别模型")
+    data_url = "data:" + content_type + ";base64," + base64.b64encode(raw).decode("ascii")
+    prompt = """你是付款截图 OCR Agent。盲提取图片中清晰可见的付款证据；你不知道正确答案。
+不要猜测、补全或根据常见格式生成文字。判断画面是否明确显示支付成功/已支付（待支付、输入金额页、失败、退款均为 false），提取实付金额数字，并从备注、附言、商品说明或订单信息中提取完整商户订单号。字段不清晰就返回 null 或空字符串。
+只返回 JSON：{"payment_success":false,"amount":null,"order_id":"","confidence":0.0,"reason":"简短说明可见证据"}"""
+    result = _creative_asset_prompt(prompt, [data_url],
+                                    {**cfg, "model": PAYMENT_REVIEW_MODEL},
+                                    max_tokens=1024, attempts=2, timeout=60)
+    try:
+        amount_matches = abs(float(result.get("amount")) - float(order["amount_cny"])) < 0.001
+    except (TypeError, ValueError):
+        amount_matches = False
+    order_id = str(result.get("order_id") or "").strip().upper()
+    confidence = max(0.0, min(1.0, float(result.get("confidence") or 0.0)))
+    reasons: list[str] = []
+    if not result.get("payment_success"):
+        reasons.append("未清晰识别到支付成功状态")
+    if not amount_matches:
+        reasons.append(f"金额不一致（识别：{result.get('amount')!s}，应付：{float(order['amount_cny']):.2f}）")
+    if order_id != order["order_id"]:
+        reasons.append(f"订单号不一致（识别：{order_id or '空'}，应为：{order['order_id']}）")
+    if confidence < 0.98:
+        reasons.append(f"图片识别置信度不足（{confidence:.2f}）")
+    verified = bool(result.get("payment_success")) and amount_matches \
+        and order_id == order["order_id"] and confidence >= 0.98
+    return {"verified": verified, "payment_success": bool(result.get("payment_success")),
+            "amount": result.get("amount"), "order_id": order_id,
+            "confidence": confidence,
+            "reason": "；".join(reasons) if reasons else "支付状态、金额和订单号均匹配",
+            "evidence_note": str(result.get("reason") or "")[:300]}
 
 
 _ORDER_ID_RE = re.compile(r"^VI[A-F0-9]{8}$")
@@ -956,6 +1024,21 @@ def _validate_creative_phase(
                              and not str(x.get("dialogue") or "").strip())
         if empty_dialogue > max(1, len(shots) // 2):
             raise HTTPException(502, "新脚本多数镜头缺少新台词，已阻止残缺结果进入下一步")
+        if script.get("target_seconds") is not None:
+            previous_end = 0.0
+            for index, shot in enumerate(shots):
+                try:
+                    start, end = float(shot.get("start")), float(shot.get("end"))
+                except (TypeError, ValueError):
+                    raise HTTPException(502, "新脚本存在无效时间，已阻止进入下一步")
+                if abs(start - previous_end) > 0.05 or end <= start:
+                    raise HTTPException(502, "新脚本时间轴不连续，已阻止进入下一步")
+                if int(shot.get("shot") or 0) != index + 1:
+                    raise HTTPException(502, "新脚本镜头顺序异常，已阻止进入下一步")
+                previous_end = end
+            target_seconds = float(script.get("target_seconds"))
+            if abs(previous_end - target_seconds) > 0.05:
+                raise HTTPException(502, "新脚本没有完整覆盖目标时长，已阻止进入下一步")
         result.setdefault("role_profiles", [])
         result.setdefault("product_profiles", [])
     elif phase == "storyboard":
@@ -966,7 +1049,16 @@ def _validate_creative_phase(
         actual = [int(row.get("group") or 0) for row in rows if isinstance(row, dict)]
         if wanted and actual != wanted:
             raise HTTPException(502, "分镜组数量不完整，已阻止残缺结果进入下一步")
+        previous_end = 0
         for row in rows:
+            match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)s?\s*",
+                                 str(row.get("time") or ""))
+            if not match:
+                raise HTTPException(502, "分镜组时间格式无效，已阻止进入下一步")
+            start, end = float(match.group(1)), float(match.group(2))
+            if abs(start - previous_end) > 0.05 or end <= start:
+                raise HTTPException(502, "分镜组时间存在跳段或重叠，已阻止进入下一步")
+            previous_end = end
             panels = row.get("panels") if isinstance(row, dict) else None
             if not isinstance(panels, list) or len(panels) != 9:
                 raise HTTPException(502, "每个二创九宫格必须完整包含 9 个画面")
@@ -986,6 +1078,14 @@ def _validate_creative_phase(
                    for x in (row.get("source_groups") or []) if str(x).isdigit()}
         if wanted and not wanted.issubset(covered):
             raise HTTPException(502, "视频提示词未覆盖全部分镜组，已阻止残缺结果进入下一步")
+        ordered = [int(x) for row in rows if isinstance(row, dict)
+                   for x in (row.get("source_groups") or []) if str(x).isdigit()]
+        if wanted and ordered != list(expected_groups):
+            raise HTTPException(502, "视频提示词顺序与分镜时间轴不一致，已阻止乱序结果")
+        if wanted and (len(rows) != len(expected_groups) or any(
+                [int(x) for x in (row.get("source_groups") or []) if str(x).isdigit()]
+                != [expected_groups[index]] for index, row in enumerate(rows))):
+            raise HTTPException(502, "每个视频提示词必须只对应一个同编号分镜组")
     return result
 
 
@@ -1017,7 +1117,8 @@ def _apply_explicit_speaker_evidence(segments: list[dict], understanding: dict) 
     return understanding
 
 
-def _sanitize_creative_script(result: dict, assets: list[dict]) -> dict:
+def _sanitize_creative_script(result: dict, assets: list[dict],
+                              target_seconds: int | None = None) -> dict:
     """保证模型只引用本轮真实上传的素材。"""
     allowed = {str(item.get("id")) for item in assets
                if isinstance(item, dict) and item.get("id") and not item.get("hidden")}
@@ -1025,10 +1126,37 @@ def _sanitize_creative_script(result: dict, assets: list[dict]) -> dict:
                       and not item.get("hidden") for item in assets)
     script = result.get("script") if isinstance(result, dict) else None
     if isinstance(script, dict):
-        for shot in script.get("shots") or []:
+        shots = [shot for shot in (script.get("shots") or []) if isinstance(shot, dict)]
+        for shot in shots:
             if isinstance(shot, dict):
                 shot["asset_ids"] = [str(value) for value in (shot.get("asset_ids") or [])
                                      if str(value) in allowed]
+        if target_seconds and shots:
+            # 数组顺序就是剧情顺序；仅重排时间，不重排内容。按模型给出的镜头时长
+            # 比例压缩/拉伸到目标总时长，确保从 0 开始、无重叠、无空档。
+            durations = []
+            for shot in shots:
+                try:
+                    duration = float(shot.get("end")) - float(shot.get("start"))
+                except (TypeError, ValueError):
+                    duration = 0
+                durations.append(max(0.5, duration))
+            scale = float(target_seconds) / sum(durations)
+            cursor = 0.0
+            previous_unit = 1
+            for index, (shot, duration) in enumerate(zip(shots, durations), 1):
+                start = cursor
+                cursor = float(target_seconds) if index == len(shots) else cursor + duration * scale
+                shot["shot"] = index
+                shot["start"] = round(start, 2)
+                shot["end"] = round(cursor, 2)
+                try:
+                    unit = max(previous_unit, int(shot.get("unit") or previous_unit))
+                except (TypeError, ValueError):
+                    unit = previous_unit
+                shot["unit"] = unit
+                previous_unit = unit
+            script["target_seconds"] = int(target_seconds)
         if not has_product:
             for unit in script.get("story_units") or []:
                 if isinstance(unit, dict):
@@ -1053,7 +1181,9 @@ def _creative_scene_frames(video_path: str, out_dir: str, duration: float) -> li
     pattern = os.path.join(out_dir, "scene-%03d.jpg")
     command = [
         FFMPEG, "-hide_banner", "-i", video_path,
-        "-vf", "select='gt(scene,0.28)',scale=480:-2,showinfo",
+        # 先缩到 480 宽再做场景比较：场景判断对分辨率不敏感，
+        # 却能把解码后的逐帧计算量降一个量级，长视频拆镜提速明显。
+        "-vf", "scale=480:-2,select='gt(scene,0.28)',showinfo",
         "-fps_mode", "vfr", "-frames:v", "39", "-q:v", "4", pattern,
     ]
     completed = subprocess.run(command, capture_output=True, text=True, timeout=240)
@@ -1231,6 +1361,79 @@ def _ensure_overall_summary(result: dict) -> dict:
         "本视频的主要内容包括：" + "；".join(facts) + "。"
         if facts else "本次分析未提取到足够信息，建议结合原视频复核内容。"
     )
+    return result
+
+
+def _align_storyboard_to_script(result: dict, script_result: dict,
+                                group_seconds: int, total_seconds: int) -> dict:
+    """把分镜组固定到脚本时间轴，并让每格台词只引用当前时间段镜头。"""
+    boards = [row for row in (result.get("storyboard") or []) if isinstance(row, dict)]
+    script = script_result.get("script") if isinstance(script_result, dict) else {}
+    shots = [row for row in ((script or {}).get("shots") or []) if isinstance(row, dict)]
+    for index, board in enumerate(boards):
+        start = index * group_seconds
+        end = min(total_seconds, start + group_seconds)
+        board["group"] = index + 1
+        board["time"] = f"{start}-{end}s"
+        board["duration"] = max(1, end - start)
+        matching = []
+        for shot in shots:
+            try:
+                shot_start, shot_end = float(shot.get("start")), float(shot.get("end"))
+            except (TypeError, ValueError):
+                continue
+            if shot_start < end and shot_end > start:
+                matching.append(shot)
+        if not matching and shots:
+            midpoint = (start + end) / 2
+            matching = [min(shots, key=lambda item: abs(
+                (float(item.get("start") or 0) + float(item.get("end") or 0)) / 2 - midpoint))]
+        board["source_shots"] = [int(shot.get("shot") or 0) for shot in matching]
+        panels = [panel for panel in (board.get("panels") or []) if isinstance(panel, dict)]
+        for panel_index, panel in enumerate(panels):
+            if not matching:
+                continue
+            source = matching[min(len(matching) - 1,
+                                  panel_index * len(matching) // max(1, len(panels)))]
+            panel["source_shot"] = int(source.get("shot") or 0)
+            # 台词与说话人属于强连续字段，不能由分镜阶段改写或串到别组。
+            panel["dialogue"] = str(source.get("dialogue") or "")
+            panel["speaker"] = str(source.get("speaker") or "")
+    for index, board in enumerate(boards):
+        previous_visual = ""
+        next_visual = ""
+        if index:
+            previous_panels = boards[index - 1].get("panels") or []
+            previous_visual = str((previous_panels[-1] if previous_panels else {}).get("visual") or "")
+        if index + 1 < len(boards):
+            next_panels = boards[index + 1].get("panels") or []
+            next_visual = str((next_panels[0] if next_panels else {}).get("visual") or "")
+        board["continuity_in"] = ("开场建立人物、场景与冲突" if index == 0 else
+                                  "承接上一组末格：" + previous_visual[:80])
+        board["continuity_out"] = ("剧情收束并完成行动" if index + 1 == len(boards) else
+                                   "下一组从此动作继续：" + next_visual[:80])
+    result["storyboard"] = boards
+    result["_timeline_aligned"] = True
+    return result
+
+
+def _align_video_prompts(result: dict, storyboard: list[dict]) -> dict:
+    """按来源分镜组排序提示词并锁定其时间信息，避免前后组乱穿插。"""
+    rows = [row for row in (result.get("video_prompts") or []) if isinstance(row, dict)]
+    rows.sort(key=lambda row: min([int(x) for x in (row.get("source_groups") or [])
+                                  if str(x).isdigit()] or [10**9]))
+    board_by_group = {int(row.get("group") or index + 1): row
+                      for index, row in enumerate(storyboard) if isinstance(row, dict)}
+    for index, row in enumerate(rows, 1):
+        groups = [int(x) for x in (row.get("source_groups") or []) if str(x).isdigit()]
+        row["group"] = index
+        if len(groups) == 1 and groups[0] in board_by_group:
+            board = board_by_group[groups[0]]
+            row["time"] = str(board.get("time") or "")
+            row["duration"] = int(board.get("duration") or row.get("duration") or 0)
+            row["asset_ids"] = list(board.get("asset_ids") or [])
+    result["video_prompts"] = rows
+    result["_timeline_aligned"] = True
     return result
 
 
@@ -1511,7 +1714,7 @@ async def agent_enrich(
 
 
 def _workbench_audit(workbench: dict) -> dict:
-    """本地完成制作前检查，不调用模型，也不把缺失项包装成成功。"""
+    """本地检查当前工程离可生成成片还差什么，不调用模型。"""
     deconstruction = workbench.get("deconstruction") or {}
     assets = [x for x in (workbench.get("assets") or [])
               if isinstance(x, dict) and not x.get("hidden")]
@@ -1525,8 +1728,11 @@ def _workbench_audit(workbench: dict) -> dict:
         checks.append({"name": name, "passed": bool(passed), "detail": detail,
                        "action": action})
 
-    add("原片理解", bool(deconstruction.get("shots") or deconstruction.get("understanding")),
-        "已具备原片结构" if deconstruction else "尚未完成原片拆解", "先完成原片理解")
+    has_deconstruction = bool(deconstruction.get("shots") or
+                              deconstruction.get("understanding"))
+    add("原片理解", has_deconstruction,
+        "已具备原片结构" if has_deconstruction else "尚未完成原片拆解",
+        "先完成原片理解")
     add("创作资产", bool(assets), f"已启用 {len(assets)} 项素材" if assets else "没有启用人物、产品或场景素材",
         "至少添加并启用一项素材")
     usable_shots = [x for x in shots if str(x.get("visual") or "").strip()]
@@ -1548,9 +1754,17 @@ def _workbench_audit(workbench: dict) -> dict:
     passed = sum(1 for x in checks if x["passed"])
     score = round(passed / len(checks) * 100) if checks else 0
     blockers = [x for x in checks if not x["passed"]]
-    return {"score": score, "ready": not blockers, "checks": checks,
-            "blockers": blockers, "summary": ("可以进入后续成片" if not blockers else
-            f"发现 {len(blockers)} 项需要处理的问题")}
+    started = any((has_deconstruction, assets, shots, boards, prompts))
+    status = "ready" if started and not blockers else ("in_progress" if started else
+                                                        "not_started")
+    if status == "not_started":
+        summary = "尚未进入制作流程。请先完成原片理解，再按步骤生成脚本、分镜和视频提示词。"
+    elif status == "ready":
+        summary = "必要材料均已具备，可以进入后续成片。"
+    else:
+        summary = f"当前已完成 {passed}/{len(checks)} 项；按下方建议补齐后再进入成片。"
+    return {"score": score, "status": status, "ready": status == "ready",
+            "checks": checks, "blockers": blockers, "summary": summary}
 
 
 def _sanitize_agent_patches(raw: dict, workbench: dict) -> list[dict]:
@@ -1596,6 +1810,10 @@ async def agent_workbench(
         return {"action": action, "audit": audit, "model_used": False}
     if action not in {"repair_continuity", "variants"}:
         raise HTTPException(400, "不支持的 Agent 动作")
+    if action == "repair_continuity" and not (
+        (((workbench.get("script") or {}).get("script") or {}).get("shots") or [])
+    ):
+        raise HTTPException(422, "请先完成第 03 步新脚本，再检查并修复连贯性")
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key")
@@ -1689,9 +1907,9 @@ async def creative_deconstruct(
         # 全片拆镜是 CPU 密集重活，走独立的 creative 并发池防止 OOM
         creative_slot = await acquire_analysis_slot("creative")
         scenes_task = asyncio.to_thread(_creative_scene_frames, video_path, tmpdir, duration)
+        audio_ok = False
         if srt_segments:
             scenes = await scenes_task
-            audio_run = None
         else:
             audio_task = asyncio.to_thread(
                 subprocess.run,
@@ -1700,10 +1918,22 @@ async def creative_deconstruct(
                 capture_output=True, timeout=120,
             )
             scenes, audio_run = await asyncio.gather(scenes_task, audio_task)
+            audio_ok = bool(audio_run and audio_run.returncode == 0 and
+                            os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256)
+
         transcript = {"text": "", "segments": []}
         asr_warning = ""
         cacheable = True  # 降级产生的残缺结果不允许进缓存，否则重试无法自愈
-        if not srt_segments and audio_run and audio_run.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 256:
+        segments = srt_segments or []
+
+        # 剧情理解与语音转写并行：理解先用画面+镜头结构跑（字幕留空），
+        # 转写完成后用字幕证据覆盖校准说话人，整体省掉一次串行等待。
+        base_analysis = json.loads(analysis) if analysis and len(analysis) <= 500_000 else {}
+        base_analysis = base_analysis if isinstance(base_analysis, dict) else {}
+        understanding_task = asyncio.create_task(asyncio.to_thread(
+            _creative_understanding, scenes, segments, cfg, base_analysis))
+
+        if not srt_segments and audio_ok:
             with _asr_media_lock:
                 _asr_media[token] = (audio_path, time.time() + 600)
             media_url = str(request.url_for("asr_media", token=token))
@@ -1716,7 +1946,7 @@ async def creative_deconstruct(
                 logger.warning("creative_asr_fallback reason=%s", exc)
                 asr_warning = "台词识别暂时失败，镜头拆解已保留，可稍后重试。"
                 cacheable = False
-        else:
+        elif not srt_segments:
             asr_warning = "视频没有可识别音轨，已完成镜头拆解。"
 
         segments = srt_segments or transcript.get("segments") or []
@@ -1729,17 +1959,13 @@ async def creative_deconstruct(
         understanding = {}
         understanding_warning = ""
         try:
-            base_analysis = json.loads(analysis) if analysis and len(analysis) <= 500_000 else {}
-            understanding = await asyncio.to_thread(
-                _creative_understanding, scenes, segments, cfg,
-                base_analysis if isinstance(base_analysis, dict) else {})
+            understanding = await understanding_task
             understanding = _apply_explicit_speaker_evidence(segments, understanding)
             segments = _merge_speaker_calibration(segments, understanding)
         except Exception as exc:
             logger.warning("creative_understanding_fallback reason=%s", exc)
             understanding = _apply_explicit_speaker_evidence(
-                segments, _understanding_from_analysis(
-                    base_analysis if isinstance(base_analysis, dict) else {}, segments))
+                segments, _understanding_from_analysis(base_analysis, segments))
             segments = _merge_speaker_calibration(segments, understanding)
             understanding_warning = "深层剧情理解暂未完成，已保留可核验的字幕人物和基础结构。"
             cacheable = False
@@ -1799,11 +2025,11 @@ async def creative_workbench(
         "reference_script": str(payload.get("reference_script") or "")[:6000],
         "understanding": (payload.get("deconstruction") or {}).get("understanding") or {},
     }
-    # 分镜组数上限 4：短剧二创通常拆 2~4 个高潮段落即可。
-    # 组数过多时，每组 9 格的输出总量会超出模型单次上限导致 JSON 截断失败，
-    # 反而回退成残缺结果。这里在「组数合理」与「输出完整」之间取平衡。
+    # 两分钟视频必须按用户选择的每组时长完整覆盖：10/15/30 秒分别为
+    # 12/8/4 组。旧逻辑写死最多 4 组，导致 2 分钟、每组 15 秒时只生成
+    # 约 60 秒内容。单次请求最多 12 组，足以完整覆盖当前 2 分钟档。
     expected_storyboard_groups = max(
-        1, min(4, (context["target_total_seconds"] + context["target_duration"] - 1)
+        1, min(12, (context["target_total_seconds"] + context["target_duration"] - 1)
                // context["target_duration"]))
     asset_images = [item.get("image", "") for item in (payload.get("assets") or [])
                     if isinstance(item, dict) and not item.get("hidden")]
@@ -1825,9 +2051,9 @@ async def creative_workbench(
     if phase == "script":
         instruction = """你是短剧情裂变编剧。以目标总时长重新规划剧情，不照抄原片；根据用户选择决定是否换产品、场景、人物或冲突模式，并可参考成熟脚本的结构但不得复制原文。说话人必须继承已校准人物；待确认台词不得擅自归属。完整脚本要写清剧情单元承接、出场人物、人物关系、服装、道具、情绪动作、产品植入方式。另生成一份与新视频匹配的通用发布配文，不指定小红书、抖音等平台。输出 JSON：{\"role_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"identity\":\"\",\"personality\":\"\",\"appearance\":\"\",\"wardrobe_by_unit\":[{\"unit\":\"\",\"wardrobe\":\"\"}]}],\"product_profiles\":[{\"asset_id\":\"\",\"name\":\"\",\"features\":\"\",\"placement_strategy\":\"\"}],\"script\":{\"title\":\"\",\"creative_angle\":\"\",\"target_seconds\":120,\"story_units\":[{\"unit\":1,\"purpose\":\"\",\"transition\":\"\",\"characters\":[],\"wardrobe\":\"\",\"props\":[],\"product_placement\":\"\"}],\"shots\":[{\"shot\":1,\"unit\":1,\"start\":0,\"end\":10,\"speaker\":\"\",\"emotion\":\"\",\"action\":\"\",\"shot_type\":\"\",\"visual\":\"\",\"dialogue\":\"\",\"asset_ids\":[\"\"]}]},\"post_copy\":{\"titles\":[\"标题1\",\"标题2\",\"标题3\"],\"body\":\"与新视频内容一致的简洁发布配文\",\"tags\":[\"标签\"]}}。"""
     elif phase == "storyboard":
-        instruction = f"""你是连续分镜导演。把完整脚本严格拆成 {expected_storyboard_groups} 个连续分镜组，组号必须从 1 连续到 {expected_storyboard_groups}。每一组必须恰好规划 9 个连续画面（不是最多9格），用动作过程、反应、景别和机位变化把该时间段的真实剧情细分为九个视觉节拍；不得添加脚本没有的新人物、新产品、新事件或重复凑数。每格都必须有可拍摄的 visual，并包含景别变化、前后连续动作、实际出场人物、服装、场景和产品素材引用。不要声称已经生成图片。每格 visual 控制在 15~25 字，只写可直接拍摄的画面要点，避免重复服装和背景描写。只输出 JSON：{{\"storyboard\":[{{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{{\"panel\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"可直接拍摄的具体画面\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}}],\"grid_prompt\":\"完整3×3九宫格生图提示词\",\"negative_prompt\":\"\"}}]}}。"""
+        instruction = f"""你是连续分镜导演。把完整脚本严格拆成 {expected_storyboard_groups} 个连续分镜组，组号必须从 1 连续到 {expected_storyboard_groups}。时间必须从0秒开始连续递增，禁止跳段、倒序或重叠。每组只能使用与本组时间重叠的脚本镜头、人物和台词，台词必须原样引用对应脚本镜头，不得把后面剧情提前或把前面剧情挪到后面。每一组必须恰好规划 9 个连续画面（不是最多9格），九格内部按动作发生顺序推进，末格必须能自然接上下一组首格；不得添加脚本没有的新人物、新产品、新事件或重复凑数。每格都必须有可拍摄的 visual，并包含景别变化、前后连续动作、实际出场人物、服装、场景和产品素材引用。不要声称已经生成图片。每格 visual 控制在 15~25 字，只写可直接拍摄的画面要点。只输出 JSON：{{\"storyboard\":[{{\"group\":1,\"time\":\"0-15s\",\"duration\":15,\"unit\":1,\"source_shots\":[1],\"asset_ids\":[\"\"],\"continuity_in\":\"\",\"continuity_out\":\"\",\"panels\":[{{\"panel\":1,\"source_shot\":1,\"shot_size\":\"全景/中景/近景/特写\",\"visual\":\"可直接拍摄的具体画面\",\"speaker\":\"\",\"dialogue\":\"\",\"emotion_action\":\"\"}}],\"grid_prompt\":\"完整3×3九宫格生图提示词\",\"negative_prompt\":\"\"}}]}}。"""
     else:
-        instruction = """你是视频生成提示词编排器。逐个连续分镜组生成提示词；引用该组实际出现的人物/场景/产品 asset_id，写明说话人、对应台词、情绪动作、镜头变化与前后连续性。人物音频没有真实素材时标记 voice_status=missing，不得伪称已生成。10至15秒使用一组九宫格；30秒可组合相邻两组但不能打乱剧情。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"包含主体、动作、台词、运镜、场景、产品、节奏、转场、声音的可执行提示词\"}]}。"""
+        instruction = """你是视频生成提示词编排器。必须按分镜组编号逐组生成，一组提示词只允许引用同编号 source_group 的九宫格、人物、场景、产品和台词，禁止跨组挪用、倒序、提前剧透或改写人物台词。提示词里的动作顺序必须与九宫格1到9格一致，并写清承接上一组的起始状态与交给下一组的结束状态。人物音频没有真实素材时标记 voice_status=missing，这只表示后期需要配音，不影响画面提示词。输出组数必须与输入分镜组数相同且顺序完全一致。输出 JSON：{\"video_prompts\":[{\"group\":1,\"source_groups\":[1],\"time\":\"0-15s\",\"duration\":15,\"asset_ids\":[\"\"],\"speakers\":[\"\"],\"voice_status\":\"ready/missing\",\"prompt\":\"严格按本组九宫格顺序，包含主体、动作、原台词、运镜、场景、产品、节奏、转场和声音的可执行提示词\"}]}。"""
     if phase == "script":
         instruction += """\n真实性硬规则：只能引用 assets 中真实存在的 asset_id；没有 product 类型素材时 product_profiles 和 product_placement 必须为空，台词与画面不得虚构产品、品牌、价格、人物履历或原片未提供的事实；信息不足时使用中性描述并标记待确认。"""
         instruction += """\n镜头字段硬规则：每个 shot_type 必须写成“景别 · 机位/运镜”（如“中景 · 平视跟拍”）；每个 visual 必须描述可直接拍摄的新画面、主体动作及与前后镜头的衔接。禁止填写“待补充”“待确认”或“参考原镜头重新设计画面”。"""
@@ -1847,7 +2073,14 @@ async def creative_workbench(
     result = await asyncio.to_thread(
         call_qwen_text_json, prompt, cfg, 0.2, token_limit)
     if phase == "script":
-        result = _sanitize_creative_script(result, payload.get("assets") or [])
+        result = _sanitize_creative_script(result, payload.get("assets") or [],
+                                           context["target_total_seconds"])
+    elif phase == "storyboard":
+        result = _align_storyboard_to_script(
+            result, context.get("script") or {}, context["target_duration"],
+            context["target_total_seconds"])
+    elif phase == "prompts":
+        result = _align_video_prompts(result, context.get("storyboard") or [])
     try:
         expected = (expected_storyboard_groups if phase == "storyboard" else
                     [int(row.get("group") or index + 1)
@@ -1859,7 +2092,14 @@ async def creative_workbench(
         repaired = await asyncio.to_thread(
             call_qwen_text_json, repair_prompt, cfg, 0.2, token_limit)
         if phase == "script":
-            repaired = _sanitize_creative_script(repaired, payload.get("assets") or [])
+            repaired = _sanitize_creative_script(repaired, payload.get("assets") or [],
+                                                 context["target_total_seconds"])
+        elif phase == "storyboard":
+            repaired = _align_storyboard_to_script(
+                repaired, context.get("script") or {}, context["target_duration"],
+                context["target_total_seconds"])
+        elif phase == "prompts":
+            repaired = _align_video_prompts(repaired, context.get("storyboard") or [])
         final_result = _validate_creative_phase(phase, repaired, expected)
     _cache_put(cache_key, final_result)
     return final_result
@@ -1920,7 +2160,7 @@ async def creative_storyboard_grid(
                                        GRID_SERVICE_FEE_CNY)
         if usage["reservation"] == "denied":
             raise HTTPException(402, detail={"code": "grid_payment_required",
-                                            "message": "免费体验额度已用完，请支付本次平台生成费用后联系管理员开通。",
+                                            "message": "免费体验额度已用完，完成本次付款核验后即可继续生成。",
                                             **usage})
         _save_grid_usage_locked()
     try:
@@ -2279,6 +2519,7 @@ def health():
 async def payment_order(request: Request, payload: dict = Body(default={}),
                         _code: None = Depends(require_code)):
     """锁定本次生成的应付金额：价格由服务端按参考素材数计算，客户端不可自报金额。"""
+    _require_durable_payment_store()
     try:
         refs = max(0, min(3, int(payload.get("reference_count") or 0)))
     except (TypeError, ValueError):
@@ -2302,6 +2543,7 @@ async def payment_proof(
     _code: None = Depends(require_code),
 ):
     """用户上传微信付款截图；保存并推送提醒，由管理员人工核对金额后开通。"""
+    _require_durable_payment_store()
     if not _ORDER_ID_RE.fullmatch(order_id or ""):
         raise HTTPException(400, "订单号格式不正确")
     content_type = (screenshot.content_type or "").lower()
@@ -2311,27 +2553,56 @@ async def payment_proof(
     if not 1024 <= len(raw) <= 5 * 1024 * 1024:
         raise HTTPException(400, "截图大小需在 1KB~5MB 之间")
     ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[content_type]
+    proof_hash = hashlib.sha256(raw).hexdigest()
     with _grid_usage_lock:
         order = _grid_usage.setdefault("orders", {}).get(order_id)
         if not order:
             raise HTTPException(404, "订单不存在，请返回重新发起生成")
         if order.get("status") == "approved":
             raise HTTPException(400, "该订单已开通，无需重复提交")
-        PAYMENT_PROOF_DIR.mkdir(parents=True, exist_ok=True)
-        path = PAYMENT_PROOF_DIR / f"{order_id}.{ext}"
-        path.write_bytes(raw)
+        duplicate = next((item for oid, item in _grid_usage.get("orders", {}).items()
+                          if oid != order_id and item.get("proof_sha256") == proof_hash), None)
+        filename = f"{order_id}.{ext}"
+        PAYMENT_STORE.proof_dir = PAYMENT_PROOF_DIR
+        PAYMENT_STORE.save_proof(order_id, filename, content_type, proof_hash, raw)
         order["status"] = "reviewing"
-        order["proof"] = path.name
+        order["proof"] = filename
+        order["proof_sha256"] = proof_hash
+        order["auto_review"] = {"verified": False, "reason": "相同截图已提交到其他订单"} \
+            if duplicate else {"verified": False, "reason": "等待自动识别"}
         _save_grid_usage_locked()
+        order_snapshot = dict(order)
+    if PAYMENT_AUTO_REVIEW and not duplicate:
+        try:
+            review = await asyncio.to_thread(_analyze_payment_proof, raw, content_type, order_snapshot)
+            with _grid_usage_lock:
+                order = _grid_usage.setdefault("orders", {}).get(order_id)
+                if order:
+                    order["auto_review"] = review
+                    if review["verified"]:
+                        _grant_payment_credit_locked(order, "payment-agent")
+                    _save_grid_usage_locked()
+        except Exception as exc:
+            logger.warning("payment_auto_review_failed order=%s reason=%s", order_id,
+                           type(exc).__name__)
+            with _grid_usage_lock:
+                order = _grid_usage.setdefault("orders", {}).get(order_id)
+                if order:
+                    order["auto_review"] = {"verified": False,
+                        "reason": "自动识别暂不可用，已转人工审核"}
+                    _save_grid_usage_locked()
     _notify_payment_order(order)
-    return {"ok": True,
-            "message": "付款截图已提交，管理员核对到账后会尽快开通本次生成。"}
+    approved = order.get("status") == "approved"
+    return {"ok": True, "status": order.get("status"),
+            "message": ("截图信息已自动核验通过，本次生成已开通。" if approved else
+                        "付款信息已收到，核验完成后即可继续生成；其他功能可以正常使用。")}
 
 
 @app.get("/api/payment/orders")
 def payment_orders(token: str = ""):
     """审核后台：列出全部订单（需管理员口令）。"""
     _require_payment_admin(token)
+    _require_durable_payment_store()
     with _grid_usage_lock:
         orders = [dict(v, order_id=k) if "order_id" not in v else dict(v)
                   for k, v in _grid_usage.get("orders", {}).items()]
@@ -2343,20 +2614,23 @@ def payment_orders(token: str = ""):
 def payment_proof_file(order_id: str, token: str = ""):
     """审核后台：查看订单对应的付款截图（需管理员口令）。"""
     _require_payment_admin(token)
+    _require_durable_payment_store()
     if not _ORDER_ID_RE.fullmatch(order_id or ""):
         raise HTTPException(400, "订单号格式不正确")
-    matches = sorted(PAYMENT_PROOF_DIR.glob(f"{order_id}.*")) if PAYMENT_PROOF_DIR.is_dir() else []
-    if not matches:
+    PAYMENT_STORE.proof_dir = PAYMENT_PROOF_DIR
+    proof = PAYMENT_STORE.get_proof(order_id)
+    if not proof:
         raise HTTPException(404, "该订单还没有上传截图")
-    media = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}.get(
-        matches[0].suffix.lstrip("."), "application/octet-stream")
-    return FileResponse(matches[0], media_type=media)
+    raw, media, filename = proof
+    return Response(content=raw, media_type=media,
+                    headers={"Content-Disposition": f'inline; filename="{filename}"'})
 
 
 @app.post("/api/payment/review")
 async def payment_review(payload: dict = Body(...)):
     """管理员审核：批准即按订单绑定身份加 1 次生成额度（换设备/换网络仍有效）。"""
     _require_payment_admin(str(payload.get("token") or ""))
+    _require_durable_payment_store()
     order_id = str(payload.get("order_id") or "")
     action = str(payload.get("action") or "")
     if not _ORDER_ID_RE.fullmatch(order_id):
@@ -2366,11 +2640,7 @@ async def payment_review(payload: dict = Body(...)):
         if not order:
             raise HTTPException(404, "订单不存在")
         if action == "approve":
-            order["status"] = "approved"
-            order["reviewed"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            credits = _grid_usage.setdefault("credits", {})
-            for key in order.get("keys") or []:
-                credits[key] = int(credits.get(key, 0)) + 1
+            _grant_payment_credit_locked(order, "admin")
         elif action == "reject":
             order["status"] = "rejected"
             order["reviewed"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -2382,10 +2652,17 @@ async def payment_review(payload: dict = Body(...)):
 
 def readiness_checks() -> dict:
     """Check dependencies required to accept real analysis traffic."""
+    payment_store_ready = True
+    if PAYMENT_REQUIRE_DURABLE:
+        try:
+            _require_durable_payment_store()
+        except HTTPException:
+            payment_store_ready = False
     return {
         "api_key": bool(load_config().get("api_key")),
         "ffmpeg": bool(FFMPEG and os.path.isfile(FFMPEG)),
         "static": STATIC_DIR.joinpath("index.html").is_file(),
+        "payment_store": payment_store_ready,
     }
 
 
