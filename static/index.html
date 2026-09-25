@@ -511,7 +511,7 @@
 <div class="modal-mask" id="gridConfirmMask" role="dialog" aria-modal="true" aria-labelledby="gridConfirmTitle">
   <div class="modal" style="max-width:400px">
     <h3 id="gridConfirmTitle">确认生成本组二创九宫格？</h3>
-    <p class="pay-detail" style="text-align:left;margin-top:6px">调用深度图像生成能力，预计消耗对应的费用（例如 ¥0.18–¥0.24），超出免费额度后，每组将增加 ¥0.10 平台费。</p>
+    <p class="pay-detail" style="text-align:left;margin-top:6px">本次需支付：<b id="gridConfirmAmount">¥0.00</b><span id="gridConfirmNote" style="font-weight:400"></span></p>
     <div class="btns" style="margin-top:18px">
       <button type="button" id="btnGridConfirmCancel">取消</button>
       <button type="button" class="primary" id="btnGridConfirmOk">确定生成</button>
@@ -592,8 +592,12 @@ function toast(msg){
 }
 var gridPayRefs=0,gridPayOrderId="",gridPayAmount=0,gridPayResumeButton=null;
 var gridConfirmCallback=null;
-function askGridConfirm(cb){
+function askGridConfirm(cb,quote){
   gridConfirmCallback=cb;
+  var q=quote||{},paid=Number(q.paid_credits||0)>0;
+  var free=(Number(q.used_cny||0)+Number(q.model_cost_cny||0))<=(Number(q.free_limit_cny||0)+1e-9)&&!paid;
+  $("gridConfirmAmount").textContent="¥"+(free?0:Number(q.payable_cny||0)).toFixed(2);
+  $("gridConfirmNote").textContent=free?"（在免费额度内，不扣费）":(paid?"（由已购额度抵扣，无需再付）":"（确定后进入支付）");
   $("gridConfirmMask").style.display="flex";
 }
 $("btnGridConfirmOk").onclick=function(){ $("gridConfirmMask").style.display="none"; var cb=gridConfirmCallback; gridConfirmCallback=null; if(cb)cb(); };
@@ -1410,7 +1414,14 @@ function renderWorkbenchAudit(audit){
 function renderWorkbenchAgent(result){
   lastWorkbenchAgentResult=result;var output=$("agentToolOutput"),html=renderWorkbenchAudit(result.audit);
   if(result.action==="variants")html+='<h4 style="margin:14px 0 8px">可采用的裂变方向</h4><div class="variant-grid">'+(result.variants||[]).map(function(x,i){return '<div class="variant-card"><h4>'+esc(x.title||("方向 "+(i+1)))+'</h4><p><b>角度：</b>'+esc(x.angle||"")+'<br><b>钩子：</b>'+esc(x.hook||"")+'<br><b>冲突：</b>'+esc(x.conflict||"")+'</p><button data-use-variant="'+i+'">采用此方向</button></div>';}).join("")+'</div>';
-  if(result.action==="repair_continuity")html+='<h4 style="margin:14px 0 8px">连贯性修复建议</h4><p class="tip">'+esc(result.summary||"")+'</p><div class="patch-list">'+(result.patches||[]).map(function(x){return '<div class="patch-item"><b>'+esc(x.target==="script_shot"?"脚本镜头 "+(x.index+1):"分镜组 "+(x.index+1))+' · '+esc(x.field)+'</b><br>'+esc(x.value)+'<br><span class="tip">'+esc(x.reason||"")+'</span></div>';}).join("")+'</div>'+((result.patches||[]).length?'<button class="primary" id="btnApplyAgentPatches" style="margin-top:10px">应用全部安全修复</button>':'<p class="tip">没有发现需要修改的连贯性问题。</p>');
+  if(result.action==="repair_continuity"){
+    var stdTip='<p class="tip">修复标准：只处理人物、场景、台词、时间线的硬冲突；相邻分镜组「人物、场景、动作状态」能衔接即算通过；不改动措辞风格，不引入新的人物、产品或事实。</p>';
+    if(result.passed&&!(result.patches||[]).length){
+      html+='<h4 style="margin:14px 0 8px">连贯性检查结果</h4><div class="patch-item" style="border-color:#cfe3cc;background:#f2f8ee"><b style="color:#27500a">✓ 已达到可生成标准</b><br><span class="tip">'+esc(result.summary||"相邻分镜组的人物、场景与动作状态可以衔接，时间线连续，可直接进入九宫格生成。")+'</span></div>'+stdTip;
+    } else {
+      html+='<h4 style="margin:14px 0 8px">连贯性修复建议</h4><p class="tip">'+esc(result.summary||"")+'</p><div class="patch-list">'+(result.patches||[]).map(function(x){return '<div class="patch-item"><b>'+esc(x.target==="script_shot"?"脚本镜头 "+(x.index+1):"分镜组 "+(x.index+1))+' · '+esc(x.field)+'</b><br>'+esc(x.value)+'<br><span class="tip">'+esc(x.reason||"")+'</span></div>';}).join("")+'</div>'+((result.patches||[]).length?'<button class="primary" id="btnApplyAgentPatches" style="margin-top:10px">应用全部安全修复</button>':'<p class="tip">没有发现需要修改的连贯性问题。</p>')+stdTip;
+    }
+  }
   output.innerHTML=html;output.style.display="block";
   document.querySelectorAll("[data-use-variant]").forEach(function(btn){btn.onclick=function(){var item=(result.variants||[])[Number(btn.dataset.useVariant)];if(!item)return;$("creativeRequirements").value=item.requirement||"";$("creativeRequirements").scrollIntoView({behavior:"smooth",block:"center"});toast("裂变方向已写入创作要求，可继续生成新脚本");};});
   var apply=$("btnApplyAgentPatches");if(apply)apply.onclick=function(){applyAgentPatches(result.patches||[]);};
@@ -1424,7 +1435,7 @@ function runWorkbenchAgent(action,button){
   if(!lastResult){toast("请先完成视频分析");return;}
   if(action==="repair_continuity"&&!((((creativeWorkspace.script||{}).script||{}).shots||[]).length)){toast("请先完成第 03 步新脚本，再检查并修复连贯性");return;}
   var old=button.textContent;button.disabled=true;button.textContent="Agent 执行中…";
-  api("/api/agent/workbench",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(agentWorkbenchPayload(action))}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"Agent 执行失败");return j;});}).then(function(j){renderWorkbenchAgent(j);toast(action==="audit"?"制作质检完成":action==="variants"?"裂变方向已生成":"连贯性检查完成");}).catch(function(e){toast(e.message||"Agent 暂未完成，现有工程已保留");}).finally(function(){button.disabled=false;button.textContent=old;});
+  api("/api/agent/workbench",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(agentWorkbenchPayload(action))}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"Agent 执行失败");return j;});}).then(function(j){renderWorkbenchAgent(j);toast(action==="audit"?"制作质检完成":action==="variants"?"裂变方向已生成":(j.passed?"连贯性检查通过，可直接进入生成":"发现 "+((j.patches||[]).length)+" 处硬伤，已生成修复建议"));}).catch(function(e){toast(e.message||"Agent 暂未完成，现有工程已保留");}).finally(function(){button.disabled=false;button.textContent=old;});
 }
 $("btnAgentAudit").onclick=function(){runWorkbenchAgent("audit",this);};
 $("btnAgentContinuity").onclick=function(){runWorkbenchAgent("repair_continuity",this);};
@@ -1522,13 +1533,17 @@ function renderStoryboard(rows){
     while(cells.length<9)cells.push('<div class="plan-cell empty">画面缺失<br>请重新生成</div>');
     var complete=panels.length===9,meta='<span class="plan-grid-meta">'+esc(x.time||"")+' · '+panels.length+'/9 格'+(complete?' · 完整':' · 不完整')+'</span>';
     var generated=x.generated_grid_url?'<div class="generated-grid"><img src="'+esc(x.generated_grid_url)+'" alt="第 '+esc(x.group||index+1)+' 组二创九宫格"><div class="grid-caption"><span>第 '+esc(x.group||index+1)+' 组 · 二创九宫格</span><a href="'+esc(x.generated_grid_url)+'" target="_blank" rel="noopener">查看 / 保存原图</a></div></div>':'';
-    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'调用深度图像生成能力，预计消耗对应的费用（例如 ¥0.18–¥0.24），超出免费额度后，每组将增加 ¥0.10 平台费。':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
+    return '<div class="plan-grid-card"><div class="plan-grid-title">第 '+esc(x.group||x.shot||index+1)+' 组 · 二创九宫格'+meta+'</div><div class="plan-grid">'+cells.join("")+'</div><div class="work-actions"><button data-generate-grid="'+index+'"'+(complete?'':' disabled title="请先重新生成完整九宫格方案"')+'>生成本组二创九宫格</button><span class="tip">'+(complete?'调用深度图像生成能力，预计每组费用约 ¥0.18–¥0.24。':'本组不完整，不会调用付费生图')+'</span></div>'+generated+'</div>';
   }).join("")+'</div>';
   $("storyboardOutput").innerHTML=table+grids;
   document.querySelectorAll("[data-generate-grid]").forEach(function(button){button.onclick=function(){
     var index=Number(button.dataset.generateGrid),board=creativeWorkspace.storyboard[index];if(!board)return;
     var refs=creativeWorkspace.assets.filter(function(x){return !x.hidden&&/^data:image\//.test(x.image||"");}).length;
-    askGridConfirm(function(){ startGridGeneration(button,board,refs); });
+    button.disabled=true;button.textContent="核算费用…";
+    api("/api/creative/storyboard-grid/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reference_count:Math.min(3,refs)})})
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"额度核算失败");return j;});})
+      .then(function(quote){button.disabled=false;button.textContent="生成本组二创九宫格";askGridConfirm(function(){ startGridGeneration(button,board,refs); },quote);})
+      .catch(function(e){button.disabled=false;button.textContent="生成本组二创九宫格";toast(e.message||"额度核算失败，请稍后重试");});
   };});
   $("storyboardPanel").style.display="block";setWorkbenchStep(4);$("storyboardPanel").scrollIntoView({behavior:"smooth",block:"start"});
 }

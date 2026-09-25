@@ -1840,7 +1840,7 @@ def _sanitize_agent_patches(raw: dict, workbench: dict) -> list[dict]:
     script_count = len((((workbench.get("script") or {}).get("script") or {}).get("shots") or []))
     board_count = len(workbench.get("storyboard") or [])
     clean = []
-    for item in (raw.get("patches") or [])[:30]:
+    for item in (raw.get("patches") or [])[:8]:
         if not isinstance(item, dict):
             continue
         target, field = str(item.get("target") or ""), str(item.get("field") or "")
@@ -1899,10 +1899,29 @@ async def agent_workbench(
             if len(variants) != 3 or any(not str(x.get("requirement") or "").strip() for x in variants):
                 raise HTTPException(502, "Agent 没有生成完整的三个裂变方向")
             return {"action": action, "variants": variants, "audit": audit, "model_used": True}
-        prompt = """你是影视连续性修复 Agent。检查脚本中的人物、台词、动作、情绪、景别和分镜组承接，只提出确有必要的修复。不能增加不存在的人物、产品和事实。通过受控补丁返回修改，不要返回整份脚本。target 只能是 script_shot 或 storyboard_group；index 从0开始；script_shot field 只能是 visual/dialogue/action/emotion/shot_type，storyboard_group field 只能是 continuity_in/continuity_out/grid_prompt。只输出 JSON：{\"summary\":\"\",\"patches\":[{\"target\":\"script_shot\",\"index\":0,\"field\":\"visual\",\"value\":\"修复后的内容\",\"reason\":\"修复原因\"}]}。\n工作区：""" + json.dumps(snapshot, ensure_ascii=False)[:60000]
+        prompt = """你是影视连续性修复 Agent。你的目标只有一个：让脚本和分镜达到「可以顺利生成成片」的实用标准，而不是打磨完美剧本。
+
+【只修以下 5 类硬伤，其余一律不动】
+1. 人物状态矛盾：同一人物的位置、持有物、服装、伤损在前后镜头/分镜组直接冲突。
+2. 场景跳变：相邻分镜组之间地点或时间突变，且没有任何承接交代。
+3. 台词因果断裂：对话答非所问、说话人与台词对不上、后一镜头的反应缺少前一镜头的诱因。
+4. 承接字段冲突：上一组 continuity_out 与下一组 continuity_in 描述的状态互相矛盾。
+5. 时间线错误：时间倒流、跳段，或与既定时长明显不符。
+
+【以下一律不算问题，禁止修改】
+- 措辞风格、表达喜好、镜头美学倾向；
+- 可以有多种合理解读、不构成硬冲突的描述；
+- 只有引入工作区中不存在的新人物、新产品、新事实才能"修复"的问题——宁可保留原样，不得编造。
+
+【收敛标准（到这就停，不要继续找问题）】
+相邻分镜组在「人物、场景、动作状态」三要素上能对上、时间线连续、台词因果成立，即视为通过。通过时 patches 返回空数组且 passed=true。不要为了让报告显得有价值而制造修改。单次最多提出 8 条补丁，只修必要的。
+
+通过受控补丁返回修改，不要返回整份脚本。target 只能是 script_shot 或 storyboard_group；index 从0开始；script_shot field 只能是 visual/dialogue/action/emotion/shot_type，storyboard_group field 只能是 continuity_in/continuity_out/grid_prompt。只输出 JSON：{\"passed\":false,\"summary\":\"\",\"patches\":[{\"target\":\"script_shot\",\"index\":0,\"field\":\"visual\",\"value\":\"修复后的内容\",\"reason\":\"修复原因\"}]}。\n工作区：""" + json.dumps(snapshot, ensure_ascii=False)[:60000]
         result = await asyncio.to_thread(call_qwen_text_json, prompt, cfg, 0.2, 3200)
         patches = _sanitize_agent_patches(result, workbench)
-        return {"action": action, "summary": str(result.get("summary") or "连续性检查完成")[:500],
+        passed = bool(result.get("passed")) and not patches
+        return {"action": action, "passed": passed,
+                "summary": str(result.get("summary") or "连续性检查完成")[:500],
                 "patches": patches, "audit": audit, "model_used": True}
     finally:
         agent_slot.release()
