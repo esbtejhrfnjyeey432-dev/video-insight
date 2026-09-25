@@ -1415,7 +1415,7 @@ function renderWorkbenchAgent(result){
   lastWorkbenchAgentResult=result;var output=$("agentToolOutput"),html=renderWorkbenchAudit(result.audit);
   if(result.action==="variants")html+='<h4 style="margin:14px 0 8px">可采用的裂变方向</h4><div class="variant-grid">'+(result.variants||[]).map(function(x,i){return '<div class="variant-card"><h4>'+esc(x.title||("方向 "+(i+1)))+'</h4><p><b>角度：</b>'+esc(x.angle||"")+'<br><b>钩子：</b>'+esc(x.hook||"")+'<br><b>冲突：</b>'+esc(x.conflict||"")+'</p><button data-use-variant="'+i+'">采用此方向</button></div>';}).join("")+'</div>';
   if(result.action==="repair_continuity"){
-    var stdTip='<p class="tip">修复标准：只处理人物、场景、台词、时间线的硬冲突；相邻分镜组「人物、场景、动作状态」能衔接即算通过；不改动措辞风格，不引入新的人物、产品或事实。</p>';
+    var stdTip='<p class="tip" style="font-size:11px;color:#98a1b3;margin-top:4px">修复标准：只处理人物、场景、台词、时间线的硬冲突；相邻分镜组「人物、场景、动作状态」能衔接即算通过；不改动措辞风格，不引入新的人物、产品或事实。修复仅供参考。</p>';
     if(result.passed&&!(result.patches||[]).length){
       html+='<h4 style="margin:14px 0 8px">连贯性检查结果</h4><div class="patch-item" style="border-color:#cfe3cc;background:#f2f8ee"><b style="color:#27500a">✓ 已达到可生成标准</b><br><span class="tip">'+esc(result.summary||"相邻分镜组的人物、场景与动作状态可以衔接，时间线连续，可直接进入九宫格生成。")+'</span></div>'+stdTip;
     } else {
