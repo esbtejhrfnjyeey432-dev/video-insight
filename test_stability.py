@@ -385,6 +385,21 @@ class StabilityTests(unittest.TestCase):
         self.assertTrue(any(x["name"] == "九宫格" and not x["passed"]
                             for x in result["checks"]))
 
+    def test_workbench_audit_does_not_pass_zero_of_zero_dialogue(self):
+        result = app._workbench_audit({})
+        dialogue = next(x for x in result["checks"] if x["name"] == "人物台词")
+        self.assertFalse(dialogue["passed"])
+        self.assertEqual(dialogue["detail"], "0/0 个镜头有台词")
+
+    def test_missing_overall_summary_is_grounded_in_existing_facts(self):
+        result = app._ensure_overall_summary({
+            "key_info": ["第一条事实", "第二条事实"],
+            "speech_summary": "语音摘要",
+            "overall_summary": "",
+        })
+        self.assertIn("第一条事实", result["overall_summary"])
+        self.assertIn("语音摘要", result["overall_summary"])
+
     def test_workbench_agent_patches_are_field_limited(self):
         workbench = {
             "script": {"script": {"shots": [{"visual": "旧画面"}]}},

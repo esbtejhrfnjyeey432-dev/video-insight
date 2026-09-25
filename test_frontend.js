@@ -78,6 +78,16 @@ assert(html.includes("function activateToolIntent"), "Capability cards must rout
 assert(html.includes("continueToolIntent();"), "Selected capability must continue after analysis");
 assert(html.includes('/api/agent/workbench'), "Workbench Agent tools must call a real backend endpoint");
 assert(html.includes('function applyAgentPatches'), "Continuity repair must be applicable, not display-only");
+assert(html.includes('class="timeline-jump"') && html.includes('loadedmetadata'),
+  "Chapter timeline must be an actionable, metadata-safe video seek control");
+for (const path of ["creative.post_copy.titles.", "creative.highlights.",
+  "creative.storyboard.", "course.learning_objectives.", "course.slides."]) {
+  assert(html.includes(path), "Generated result is not wired to editable state: " + path);
+}
+assert(html.includes("function applyReportEditingState"),
+  "Generated report fields must enter and leave edit mode consistently");
+assert(html.includes("本次分析未提取到足够信息"),
+  "Overall summary must have a visible grounded fallback");
 for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {
   assert(!html.includes('id="' + id + '"'), "Removed variation toggle is still visible: " + id);
 }

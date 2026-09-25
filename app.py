@@ -1218,6 +1218,22 @@ def _analysis_model(cfg: dict, mode: str) -> str:
         cfg.get("model") or DEFAULT_MODEL)
 
 
+def _ensure_overall_summary(result: dict) -> dict:
+    """Fill a missing summary strictly from facts already present in the report."""
+    if str(result.get("overall_summary") or "").strip():
+        return result
+    facts = [str(item).strip() for item in (result.get("key_info") or [])
+             if str(item).strip()][:4]
+    speech = str(result.get("speech_summary") or "").strip()
+    if speech:
+        facts.append(speech)
+    result["overall_summary"] = (
+        "本视频的主要内容包括：" + "；".join(facts) + "。"
+        if facts else "本次分析未提取到足够信息，建议结合原视频复核内容。"
+    )
+    return result
+
+
 def call_qwen(frames: list, cfg: dict, duration: float | None = None,
               mode: str = "standard", transcript: str = "",
               scenario: str = "course") -> dict:
@@ -1279,7 +1295,8 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
         text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         try:
-            return parse_model_json(text)
+            # 模型偶尔会漏掉末尾总结；仅用同轮已提取事实补齐，不补造内容。
+            return _ensure_overall_summary(parse_model_json(text))
         except HTTPException as exc:
             last_err = exc
             if attempt < 2:
@@ -1516,7 +1533,7 @@ def _workbench_audit(workbench: dict) -> dict:
     spoken_shots = [x for x in shots if str(x.get("dialogue") or "").strip()]
     add("新脚本", bool(shots) and len(usable_shots) == len(shots),
         f"{len(usable_shots)}/{len(shots)} 个镜头具备可拍画面", "重新生成或补齐空画面")
-    add("人物台词", not shots or len(spoken_shots) >= max(1, len(shots) // 2),
+    add("人物台词", bool(shots) and len(spoken_shots) >= max(1, len(shots) // 2),
         f"{len(spoken_shots)}/{len(shots)} 个镜头有台词", "补齐需要说话镜头的台词")
     complete_boards = [x for x in boards if len(x.get("panels") or []) == 9 and
                        all(str(p.get("visual") or "").strip() for p in (x.get("panels") or []))]

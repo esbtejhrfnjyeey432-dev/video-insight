@@ -78,10 +78,13 @@
   .tagchip{background:#f0f2f5;color:var(--muted);border-radius:6px;padding:2px 10px;font-size:12px}
   .summary{color:var(--text);font-size:14px}
   .meta{font-size:12px;color:var(--muted);margin-top:12px}
-  .timeline{list-style:none}
-  .timeline li{display:flex;gap:12px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:14px}
-  .timeline li:last-child{border-bottom:none}
-  .t{color:var(--blue);font-weight:600;min-width:52px;font-variant-numeric:tabular-nums}
+  .timeline{list-style:none;display:grid;gap:10px}
+  .timeline li{border:1px solid var(--line);border-radius:12px;background:#fbfcff;transition:.18s}
+  .timeline li:hover{border-color:#aeb8ff;background:#f7f8ff;box-shadow:0 5px 16px rgba(50,62,120,.08)}
+  .timeline-jump{width:100%;display:grid;grid-template-columns:34px minmax(110px,auto) 1fr auto;align-items:center;gap:12px;padding:13px 14px;border:0;background:transparent;text-align:left;color:inherit;cursor:pointer}
+  .timeline-index{width:28px;height:28px;border-radius:9px;background:var(--blue-l);color:var(--blue-d);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .timeline-label{font-size:14px;line-height:1.6}.timeline-hint{font-size:12px;color:var(--blue);white-space:nowrap}
+  .t{color:var(--blue);font-weight:700;min-width:110px;font-variant-numeric:tabular-nums}
   ol.keyinfo{list-style:none;counter-reset:ki}
   ol.keyinfo li{position:relative;padding:8px 0 8px 44px;font-size:14px;border-bottom:1px dashed var(--line);counter-increment:ki}
   ol.keyinfo li:last-child{border-bottom:none}
@@ -121,7 +124,8 @@
   .report-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
   .export-group{display:flex;flex-wrap:wrap;gap:8px}.export-label{font-size:13px;font-weight:700;color:var(--muted)}
   [contenteditable="true"]{outline:2px dashed #79aede;outline-offset:3px;border-radius:3px;background:#f8fbff}
-  .timeline .t.clickable{cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+  .timeline .t.clickable{text-decoration:underline;text-underline-offset:3px}
+  @media(max-width:640px){.timeline-jump{grid-template-columns:30px 1fr;gap:7px 10px}.timeline-label{grid-column:2}.timeline-hint{grid-column:2}.t{min-width:0}}
   .video-player{width:100%;max-height:480px;background:#000;border-radius:10px;display:block}
   .modal-mask{display:none;position:fixed;inset:0;background:rgba(23,32,51,.5);backdrop-filter:blur(5px);z-index:50;align-items:center;justify-content:center}
   .modal{background:#fff;border-radius:20px;padding:28px;width:92%;max-width:460px;box-shadow:0 26px 80px rgba(23,32,51,.22)}
@@ -803,8 +807,16 @@ function parseTimecode(value){
 function jumpToChapter(timecode){
   var player = $("videoPlayer");
   if(player.src && $("videoPlayerCard").style.display !== "none"){
-    player.currentTime = Math.max(0, parseTimecode(timecode));
-    player.play().catch(function(){});
+    var target = Math.max(0, parseTimecode(timecode));
+    var seekAndPlay = function(){
+      try{
+        var maxTime = isFinite(player.duration) && player.duration > 0 ? Math.max(0, player.duration - .05) : target;
+        player.currentTime = Math.min(target, maxTime);
+        player.play().catch(function(){});
+      }catch(e){ toast("视频正在准备，请再点一次该时间"); }
+    };
+    if(player.readyState >= 1) seekAndPlay();
+    else player.addEventListener("loadedmetadata", seekAndPlay, {once:true});
     $("videoPlayerCard").scrollIntoView({behavior:"smooth", block:"center"});
   }else if(activeSourceType === "url" && activeSourceUrl){
     window.open(activeSourceUrl, "_blank", "noopener");
@@ -1098,11 +1110,16 @@ function render(a){
   var t = meta.title ? " · 《" + esc(meta.title.length > 24 ? meta.title.slice(0, 24) + "…" : meta.title) + "》" : "";
   $("meta").innerHTML = tags + " &nbsp;·&nbsp; 来源：" + esc(meta.platform || "本地文件") + t + " · 视频约 " + (meta.duration || 0) + " 秒 · " + esc(meta.speech || "仅画面分析") + " · 内容分析完成";
   $("keyInfo").innerHTML = (a.key_info || []).map(function(p){ return '<li data-editable="1">' + esc(p) + "</li>"; }).join("");
-  $("chapters").innerHTML = (a.chapters || []).map(function(c){
-    return '<li><span class="t clickable" data-editable="1" data-time="' + esc(c.time) + '">' + esc(c.time) + '</span><span data-editable="1">' + esc(c.label) + "</span></li>";
+  var chapterList = a.chapters || [], fullDuration = Number(meta.duration)||0;
+  $("chapters").innerHTML = chapterList.map(function(c,i){
+    var next = chapterList[i+1], end = next ? next.time : (fullDuration ? secondsLabel(fullDuration) : "片尾");
+    return '<li><div class="timeline-jump" role="button" tabindex="0" data-time="'+esc(c.time)+'" aria-label="跳转到 '+esc(c.time)+'">'+
+      '<span class="timeline-index">'+(i+1)+'</span><span class="t clickable" data-editable="1">'+esc(c.time)+'–'+esc(end)+'</span>'+
+      '<span class="timeline-label" data-editable="1">'+esc(c.label)+'</span><span class="timeline-hint">播放此处 →</span></div></li>';
   }).join("") || '<li><span>无</span></li>';
-  $("chapters").querySelectorAll(".t[data-time]").forEach(function(node){
-    node.onclick = function(){ if(!reportEditing) jumpToChapter(node.textContent.trim() || node.dataset.time); };
+  $("chapters").querySelectorAll(".timeline-jump[data-time]").forEach(function(node){
+    node.onclick = function(){ if(!reportEditing) jumpToChapter(node.dataset.time); };
+    node.onkeydown = function(e){ if(!reportEditing&&(e.key==="Enter"||e.key===" ")){e.preventDefault();jumpToChapter(node.dataset.time);} };
   });
 
   var speech = (a.speech_summary || "").trim();
@@ -1128,7 +1145,12 @@ function render(a){
   $("remixCard").style.display = scenario === "creative" ? "block" : "none";
   $("creativeWorkbench").style.display = scenario === "creative" ? "block" : "none";
 
-  $("overallSummary").textContent = a.overall_summary || "";
+  if(!String(a.overall_summary||"").trim()){
+    var summaryFacts=(a.key_info||[]).filter(Boolean).slice(0,4);
+    if(a.speech_summary)summaryFacts.push(a.speech_summary);
+    a.overall_summary=summaryFacts.length?("本视频的主要内容包括："+summaryFacts.join("；")+"。"):"本次分析未提取到足够信息，建议结合原视频复核内容。";
+  }
+  $("overallSummary").textContent = a.overall_summary;
   renderAgent(a);
 
   $("result").scrollIntoView({ behavior: "smooth" });
@@ -1147,20 +1169,21 @@ function renderAgent(a){
     var scripts = c.scripts || {}, postCopy = c.post_copy || c.xiaohongshu || {}, voice = c.voiceover || {};
     var html = '<div class="sec-title">二创内容包</div><div class="agent-grid">';
     html += '<div class="agent-box"><h3>多时长脚本</h3>' + ["15s","30s","60s","90s"].map(function(k){ return scripts[k] ? '<p class="agent-text" data-agent-path="creative.scripts.'+k+'"><b>'+k+'</b> '+esc(scripts[k])+'</p>' : ''; }).join("") + '</div>';
-    html += '<div class="agent-box"><h3>视频配文案</h3><p><b>标题：</b>'+esc((postCopy.titles||[]).join(" / "))+'</p><p class="agent-text" data-agent-path="creative.post_copy.body">'+esc(postCopy.body||"")+'</p><p>'+esc((postCopy.tags||[]).map(function(x){return "#"+x;}).join(" "))+'</p></div>';
-    html += '<div class="agent-box"><h3>精彩片段建议</h3><ol>' + (c.highlights||[]).map(function(x){ return '<li><b>'+esc(x.start||"")+'-'+esc(x.end||"")+' '+esc(x.title||"")+'</b><br>'+esc(x.reason||"")+'<br><span class="agent-text">钩子：'+esc(x.hook||"")+'</span></li>'; }).join("") + '</ol></div>';
-    html += '<div class="agent-box"><h3>'+esc(voice.title||"短视频口播稿")+'</h3><p class="agent-text" data-agent-path="creative.voiceover.script">'+esc(voice.script||"")+'</p></div>';
-    html += '</div><div class="sec-title" style="margin-top:16px">分镜建议</div><div class="agent-grid">' + (c.storyboard||[]).map(function(x){ return '<div class="agent-box"><h3>镜头 '+esc(x.shot||"")+' · '+esc(x.time||"")+'</h3><p><b>画面：</b>'+esc(x.visual||"")+'</p><p><b>旁白：</b>'+esc(x.narration||"")+'</p><p><b>字幕：</b>'+esc(x.caption||"")+'</p></div>'; }).join("") + '</div>';
+    html += '<div class="agent-box"><h3>视频配文案</h3><p><b>标题：</b>'+(postCopy.titles||[]).map(function(x,i){return '<span data-agent-path="creative.post_copy.titles.'+i+'">'+esc(x)+'</span>';}).join(' / ')+'</p><p class="agent-text" data-agent-path="creative.post_copy.body">'+esc(postCopy.body||"")+'</p><p>'+(postCopy.tags||[]).map(function(x,i){return '#<span data-agent-path="creative.post_copy.tags.'+i+'">'+esc(x)+'</span>';}).join(' ')+'</p></div>';
+    html += '<div class="agent-box"><h3>精彩片段建议</h3><ol>' + (c.highlights||[]).map(function(x,i){ return '<li><b><span data-agent-path="creative.highlights.'+i+'.start">'+esc(x.start||"")+'</span>-<span data-agent-path="creative.highlights.'+i+'.end">'+esc(x.end||"")+'</span> <span data-agent-path="creative.highlights.'+i+'.title">'+esc(x.title||"")+'</span></b><br><span data-agent-path="creative.highlights.'+i+'.reason">'+esc(x.reason||"")+'</span><br>钩子：<span class="agent-text" data-agent-path="creative.highlights.'+i+'.hook">'+esc(x.hook||"")+'</span></li>'; }).join("") + '</ol></div>';
+    html += '<div class="agent-box"><h3 data-agent-path="creative.voiceover.title">'+esc(voice.title||"短视频口播稿")+'</h3><p class="agent-text" data-agent-path="creative.voiceover.script">'+esc(voice.script||"")+'</p></div>';
+    html += '</div><div class="sec-title" style="margin-top:16px">分镜建议</div><div class="agent-grid">' + (c.storyboard||[]).map(function(x,i){ return '<div class="agent-box"><h3>镜头 <span data-agent-path="creative.storyboard.'+i+'.shot">'+esc(x.shot||"")+'</span> · <span data-agent-path="creative.storyboard.'+i+'.time">'+esc(x.time||"")+'</span></h3><p><b>画面：</b><span data-agent-path="creative.storyboard.'+i+'.visual">'+esc(x.visual||"")+'</span></p><p><b>旁白：</b><span data-agent-path="creative.storyboard.'+i+'.narration">'+esc(x.narration||"")+'</span></p><p><b>字幕：</b><span data-agent-path="creative.storyboard.'+i+'.caption">'+esc(x.caption||"")+'</span></p></div>'; }).join("") + '</div>';
     $("agentCreative").innerHTML = html; $("agentCreative").style.display = "block";
   } else { $("agentCreative").style.display = "none"; $("agentCreative").innerHTML = ""; }
   var course = a.course || {};
   if(Object.keys(course).length){
     var courseHtml = '<div class="sec-title">课程整理包</div><div class="agent-grid">';
-    courseHtml += '<div class="agent-box"><h3>学习目标</h3><ul>'+(course.learning_objectives||[]).map(function(x){ return '<li>'+esc(x)+'</li>'; }).join("")+'</ul></div>';
-    courseHtml += '<div class="agent-box"><h3>课程大纲</h3>'+(course.outline||[]).map(function(x){ return '<p><b>'+esc(x.title||"")+'</b>：'+esc((x.points||[]).join("；"))+'</p>'; }).join("")+'</div></div>';
-    courseHtml += '<div class="sec-title" style="margin-top:16px">PPT 课件与讲师备注</div><div class="agent-grid">'+(course.slides||[]).map(function(x,i){ return '<div class="agent-box"><h3>'+(i+1)+'. '+esc(x.title||"")+'</h3><ul>'+(x.bullets||[]).map(function(b){ return '<li>'+esc(b)+'</li>'; }).join("")+'</ul><p class="agent-text"><b>讲师备注：</b>'+esc(x.speaker_notes||"")+'</p></div>'; }).join("")+'</div>';
+    courseHtml += '<div class="agent-box"><h3>学习目标</h3><ul>'+(course.learning_objectives||[]).map(function(x,i){ return '<li data-agent-path="course.learning_objectives.'+i+'">'+esc(x)+'</li>'; }).join("")+'</ul></div>';
+    courseHtml += '<div class="agent-box"><h3>课程大纲</h3>'+(course.outline||[]).map(function(x,i){ return '<p><b data-agent-path="course.outline.'+i+'.title">'+esc(x.title||"")+'</b>：'+(x.points||[]).map(function(p,j){return '<span data-agent-path="course.outline.'+i+'.points.'+j+'">'+esc(p)+'</span>';}).join('；')+'</p>'; }).join("")+'</div></div>';
+    courseHtml += '<div class="sec-title" style="margin-top:16px">PPT 课件与讲师备注</div><div class="agent-grid">'+(course.slides||[]).map(function(x,i){ return '<div class="agent-box"><h3>'+(i+1)+'. <span data-agent-path="course.slides.'+i+'.title">'+esc(x.title||"")+'</span></h3><ul>'+(x.bullets||[]).map(function(b,j){ return '<li data-agent-path="course.slides.'+i+'.bullets.'+j+'">'+esc(b)+'</li>'; }).join("")+'</ul><p class="agent-text"><b>讲师备注：</b><span data-agent-path="course.slides.'+i+'.speaker_notes">'+esc(x.speaker_notes||"")+'</span></p></div>'; }).join("")+'</div>';
     $("agentCourse").innerHTML = courseHtml; $("agentCourse").style.display = "block";
   } else { $("agentCourse").style.display = "none"; $("agentCourse").innerHTML = ""; }
+  if(reportEditing) applyReportEditingState();
 }
 
 function runScenarioAgent(goal, automatic){
@@ -1465,9 +1488,10 @@ function syncReportFromDom(){
   lastResult.key_info = Array.from($("keyInfo").querySelectorAll("li")).map(function(x){ return x.textContent.trim(); });
   var chapterRows = Array.from($("chapters").querySelectorAll("li"));
   lastResult.chapters = chapterRows.map(function(row, i){
-    var spans = row.querySelectorAll("span");
-    return {time:(spans[0] ? spans[0].textContent.trim() : ((lastResult.chapters[i]||{}).time || "")),
-            label:(spans[1] ? spans[1].textContent.trim() : "")};
+    var timeNode=row.querySelector(".t"),labelNode=row.querySelector(".timeline-label");
+    var shown=timeNode?timeNode.textContent.trim():"",start=shown.split("–")[0].trim();
+    return {time:start || ((lastResult.chapters[i]||{}).time || ""),
+            label:labelNode ? labelNode.textContent.trim() : ""};
   });
   lastResult.speech_summary = $("speechSummary").textContent.trim();
   var teaching = lastResult.teaching || (lastResult.teaching = {});
@@ -1486,15 +1510,20 @@ function syncReportFromDom(){
   lastResult.overall_summary = $("overallSummary").textContent.trim();
 }
 
+function applyReportEditingState(){
+  document.querySelectorAll("#result [data-editable],#result [data-agent-path]").forEach(function(node){
+    node.setAttribute("contenteditable", reportEditing ? "true" : "false");
+  });
+  document.querySelectorAll("#chapters .timeline-jump").forEach(function(node){
+    node.setAttribute("aria-disabled", reportEditing ? "true" : "false");
+    node.setAttribute("tabindex", reportEditing ? "-1" : "0");
+  });
+}
+
 $("btnEdit").onclick = function(){
   if(!lastResult){ toast("请先完成一次解析"); return; }
   reportEditing = !reportEditing;
-  document.querySelectorAll("#result [data-editable]").forEach(function(node){
-    node.setAttribute("contenteditable", reportEditing ? "true" : "false");
-  });
-  document.querySelectorAll("#result [data-agent-path]").forEach(function(node){
-    node.setAttribute("contenteditable", reportEditing ? "true" : "false");
-  });
+  applyReportEditingState();
   this.textContent = reportEditing ? "保存备忘" : "编辑备忘";
   if(reportEditing){ toast("现在可以直接修改报告文字"); }
   else { syncReportFromDom(); updateActiveHistory(); toast("修改已保存"); }
