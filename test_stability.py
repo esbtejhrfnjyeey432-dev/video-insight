@@ -389,7 +389,25 @@ class StabilityTests(unittest.TestCase):
         result = app._workbench_audit({})
         dialogue = next(x for x in result["checks"] if x["name"] == "人物台词")
         self.assertFalse(dialogue["passed"])
-        self.assertEqual(dialogue["detail"], "0/0 个镜头有台词")
+        self.assertIn("生成新脚本后", dialogue["detail"])
+        original = next(x for x in result["checks"] if x["name"] == "原片理解")
+        self.assertFalse(original["passed"])
+        self.assertEqual(original["detail"], "尚未完成原片拆解")
+        self.assertEqual(result["status"], "not_started")
+        assets = next(x for x in result["checks"] if x["name"] == "参考素材")
+        self.assertTrue(assets["passed"])
+
+        required = app._workbench_audit({"requirements": "换产品并替换场景"})
+        assets = next(x for x in required["checks"] if x["name"] == "参考素材")
+        self.assertFalse(assets["passed"])
+
+    def test_continuity_agent_refuses_to_invent_feedback_without_a_script(self):
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(app.agent_workbench({
+                "action": "repair_continuity", "workbench": {}
+            }, None))
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertIn("新脚本", caught.exception.detail)
 
     def test_missing_overall_summary_is_grounded_in_existing_facts(self):
         result = app._ensure_overall_summary({

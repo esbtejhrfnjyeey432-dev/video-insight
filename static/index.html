@@ -1346,7 +1346,8 @@ function agentWorkbenchPayload(action){
 }
 function renderWorkbenchAudit(audit){
   audit=audit||{};var checks=audit.checks||[];
-  return '<div class="audit-score"><strong>'+esc(audit.score||0)+'</strong><div><b>制作完整度</b><br><span class="tip">'+esc(audit.summary||"")+'</span></div></div><div class="audit-list">'+checks.map(function(x){return '<div class="audit-item '+(x.passed?'ok':'bad')+'"><b>'+(x.passed?'✓ ':'需处理 · ')+esc(x.name||"")+'</b><br>'+esc(x.detail||"")+(x.passed||!x.action?'':'<br><span class="tip">建议：'+esc(x.action)+'</span>')+'</div>';}).join("")+'</div>';
+  var notStarted=audit.status==="not_started",scoreText=notStarted?"尚未开始":String(Number(audit.score)||0)+"%";
+  return '<div class="audit-score"><strong>'+esc(scoreText)+'</strong><div><b>成片准备度</b><br><span class="tip">检查脚本、素材、分镜和提示词是否已达到可生成条件。'+esc(audit.summary||"")+'</span></div></div><div class="audit-list">'+checks.map(function(x){return '<div class="audit-item '+(x.passed?'ok':'bad')+'"><b>'+(x.passed?'✓ ':(notStarted?'待完成 · ':'需处理 · '))+esc(x.name||"")+'</b><br>'+esc(x.detail||"")+(x.passed||!x.action?'':'<br><span class="tip">下一步：'+esc(x.action)+'</span>')+'</div>';}).join("")+'</div>';
 }
 function renderWorkbenchAgent(result){
   lastWorkbenchAgentResult=result;var output=$("agentToolOutput"),html=renderWorkbenchAudit(result.audit);
@@ -1362,7 +1363,9 @@ function applyAgentPatches(patches){
   if(creativeWorkspace.script)renderNewScript(creativeWorkspace.script);if(boards.length)renderStoryboard(boards);toast("已应用 "+applied+" 项连贯性修复");
 }
 function runWorkbenchAgent(action,button){
-  if(!lastResult){toast("请先完成视频分析");return;}var old=button.textContent;button.disabled=true;button.textContent="Agent 执行中…";
+  if(!lastResult){toast("请先完成视频分析");return;}
+  if(action==="repair_continuity"&&!((((creativeWorkspace.script||{}).script||{}).shots||[]).length)){toast("请先完成第 03 步新脚本，再检查并修复连贯性");return;}
+  var old=button.textContent;button.disabled=true;button.textContent="Agent 执行中…";
   api("/api/agent/workbench",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(agentWorkbenchPayload(action))}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"Agent 执行失败");return j;});}).then(function(j){renderWorkbenchAgent(j);toast(action==="audit"?"制作质检完成":action==="variants"?"裂变方向已生成":"连贯性检查完成");}).catch(function(e){toast(e.message||"Agent 暂未完成，现有工程已保留");}).finally(function(){button.disabled=false;button.textContent=old;});
 }
 $("btnAgentAudit").onclick=function(){runWorkbenchAgent("audit",this);};

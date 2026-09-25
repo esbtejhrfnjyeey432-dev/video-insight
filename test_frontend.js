@@ -86,6 +86,10 @@ for (const path of ["creative.post_copy.titles.", "creative.highlights.",
 }
 assert(html.includes("function applyReportEditingState"),
   "Generated report fields must enter and leave edit mode consistently");
+assert(html.includes("成片准备度") && html.includes('audit.status==="not_started"'),
+  "An empty project must show a useful staged readiness state instead of a zero score");
+assert(html.includes("请先完成第 03 步新脚本，再检查并修复连贯性"),
+  "Continuity repair must not run before a script exists");
 assert(html.includes("本次分析未提取到足够信息"),
   "Overall summary must have a visible grounded fallback");
 for (const id of ["varyProduct", "varyPerson", "varyConflict"]) {

@@ -1733,23 +1733,33 @@ def _workbench_audit(workbench: dict) -> dict:
     add("原片理解", has_deconstruction,
         "已具备原片结构" if has_deconstruction else "尚未完成原片拆解",
         "先完成原片理解")
-    add("创作资产", bool(assets), f"已启用 {len(assets)} 项素材" if assets else "没有启用人物、产品或场景素材",
-        "至少添加并启用一项素材")
+    requirements = str(workbench.get("requirements") or "")
+    needs_assets = bool(re.search(r"换人物|人物替换|换产品|产品替换|换场景|场景替换",
+                                  requirements))
+    assets_ready = bool(assets) or not needs_assets
+    asset_detail = (f"已启用 {len(assets)} 项素材" if assets else
+                    ("改编要求包含素材替换，但尚未上传对应参考图" if needs_assets else
+                     "本次没有要求替换人物、产品或场景，可沿用原片设定"))
+    add("参考素材", assets_ready, asset_detail, "上传并启用要替换的人物、产品或场景图")
     usable_shots = [x for x in shots if str(x.get("visual") or "").strip()]
     spoken_shots = [x for x in shots if str(x.get("dialogue") or "").strip()]
     add("新脚本", bool(shots) and len(usable_shots) == len(shots),
-        f"{len(usable_shots)}/{len(shots)} 个镜头具备可拍画面", "重新生成或补齐空画面")
+        (f"{len(usable_shots)}/{len(shots)} 个镜头具备可拍画面" if shots else
+         "尚未生成新脚本"), "完成第 03 步新脚本，或补齐空画面")
     add("人物台词", bool(shots) and len(spoken_shots) >= max(1, len(shots) // 2),
-        f"{len(spoken_shots)}/{len(shots)} 个镜头有台词", "补齐需要说话镜头的台词")
+        (f"{len(spoken_shots)}/{len(shots)} 个镜头有台词" if shots else
+         "生成新脚本后才能检查人物与台词关系"), "补齐需要说话镜头的台词")
     complete_boards = [x for x in boards if len(x.get("panels") or []) == 9 and
                        all(str(p.get("visual") or "").strip() for p in (x.get("panels") or []))]
     add("九宫格", bool(boards) and len(complete_boards) == len(boards),
-        f"{len(complete_boards)}/{len(boards)} 组为完整 9 格", "重新生成不完整的分镜组")
+        (f"{len(complete_boards)}/{len(boards)} 组为完整 9 格" if boards else
+         "尚未生成九宫格分镜"), "完成第 04 步分镜方案，或重新生成不完整分镜组")
     board_ids = {int(x.get("group") or i + 1) for i, x in enumerate(boards)}
     prompt_ids = {int(g) for x in prompts for g in (x.get("source_groups") or [])
                   if str(g).isdigit()}
     add("视频提示词", bool(prompts) and board_ids.issubset(prompt_ids),
-        f"已覆盖 {len(prompt_ids & board_ids)}/{len(board_ids)} 个分镜组",
+        (f"已覆盖 {len(prompt_ids & board_ids)}/{len(board_ids)} 个分镜组" if prompts else
+         "尚未生成视频提示词"),
         "为全部分镜组重新生成提示词")
     passed = sum(1 for x in checks if x["passed"])
     score = round(passed / len(checks) * 100) if checks else 0
