@@ -1521,7 +1521,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
                     "Authorization": "Bearer " + cfg["api_key"],
                     "Content-Type": "application/json",
                 },
-                json=body, timeout=75 if mode in {"quick", "standard"} else 180,
+                json=body, timeout=120 if mode in {"quick", "standard"} else 240,
             )
         except Exception as exc:
             logger.warning("model_request_failed attempt=%s type=%s", attempt + 1,
