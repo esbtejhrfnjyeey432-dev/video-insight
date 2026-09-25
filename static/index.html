@@ -386,7 +386,7 @@
       <div class="privacy-line">系统会根据视频内容自动匹配合适的整理方式：梳理镜头结构、提炼故事主线与高光片段，为后续改写脚本和规划分镜打好基础。</div>
       <div class="work-panel">
         <h3>01 / 原片理解与多人对白校准</h3>
-        <p>可选上传 SRT 字幕。系统将整理镜头、台词、核心人物、人物关系、场景、剧情单元、情绪变化、产品出现时间和前三秒吸引力。</p>
+        <p>可选上传 SRT 字幕。系统将整理镜头、台词、核心人物、人物关系、场景、剧情单元、情绪变化、产品出现时间和前三秒吸引力。使用「视频链接」来源时，服务器会直接读取链接中的原片，<b>无需上传本地视频文件</b>。</p>
         <div class="asset-toolbar"><label>＋ 可选 SRT 字幕<input id="subtitleFile" type="file" accept=".srt,application/x-subrip"></label></div>
         <div class="work-actions"><button class="primary" id="btnDeconstruct">开始深度拆解</button><span class="tip" id="deconstructStatus"></span></div>
         <div class="work-output" id="understandingOutput"></div>
@@ -1296,13 +1296,31 @@ function renderDeconstruction(data){
   setWorkbenchStep(2);
 }
 $("btnDeconstruct").onclick = function(){
-  if(!currentFile){ toast("请先在上方选择本地原视频"); return; }
   if(selectedScenario() !== "creative"){ toast("请先选择“内容整理与二次创作”场景"); return; }
   if(Number(lastResult&&lastResult._meta&&lastResult._meta.duration)>1800){fallbackDeconstruction();return;}
-  var btn = this, fd = new FormData(); fd.append("file", currentFile, currentFile.name);var sub=$("subtitleFile").files[0];if(sub)fd.append("subtitle",sub,sub.name);
-  if(lastResult)fd.append("analysis",JSON.stringify(lastResult));
+  var btn = this;
+  /* 链接来源：服务器直接从链接读取原片并拆解，全程无需上传本地视频。 */
+  if(activeSourceType === "url" && activeSourceUrl){
+    var fd = new FormData(); fd.append("url", activeSourceUrl);
+    if(lastResult)fd.append("analysis",JSON.stringify(lastResult));
+    var subFile = $("subtitleFile").files[0];
+    btn.disabled = true; btn.textContent = "正在理解…";
+    $("deconstructStatus").textContent = "正在从视频链接直接读取原片并拆解（无需上传视频，大视频约需 2~8 分钟，请勿刷新页面）…";
+    var ready = subFile ? subFile.text().then(function(t){ if(t)fd.append("subtitle_text", t); }) : Promise.resolve();
+    ready.then(function(){
+      api("/api/creative/deconstruct", {method:"POST", body:fd})
+        .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
+        .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast(j.warning ? ("部分识别未完成：" + j.warning) : "原片拆解完成"); })
+        .catch(function(e){ showErr(friendlyError((e && e.message) || "链接拆解失败"), true); fallbackDeconstruction(); })
+        .finally(function(){ btn.disabled=false; btn.textContent="重新理解原片"; });
+    });
+    return;
+  }
+  if(!currentFile){ toast("请先在上方选择本地原视频"); return; }
+  var fd2 = new FormData(); fd2.append("file", currentFile, currentFile.name);var sub=$("subtitleFile").files[0];if(sub)fd2.append("subtitle",sub,sub.name);
+  if(lastResult)fd2.append("analysis",JSON.stringify(lastResult));
   btn.disabled = true; btn.textContent = "正在理解…"; $("deconstructStatus").textContent = "正在识别镜头、校准多人对白并分析剧情结构，请勿刷新…";
-  api("/api/creative/deconstruct", {method:"POST", body:fd})
+  api("/api/creative/deconstruct", {method:"POST", body:fd2})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
     .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast(j.warning ? ("部分识别未完成：" + j.warning) : "原片拆解完成"); })
     .catch(function(){ fallbackDeconstruction(); })

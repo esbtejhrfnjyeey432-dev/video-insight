@@ -1923,42 +1923,73 @@ def asr_media(token: str):
 @app.post("/api/creative/deconstruct")
 async def creative_deconstruct(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     subtitle: UploadFile | None = File(None),
+    url: str = Form(""),
+    subtitle_text: str = Form(""),
     analysis: str = Form(""),
     _code: None = Depends(require_code),
 ):
-    """电商二创第一步：FFmpeg 临时拆镜头，百炼返回带时间轴台词。"""
+    """电商二创第一步：FFmpeg 临时拆镜头，百炼返回带时间轴台词。
+
+    支持两种来源：上传本地视频文件（file），或粘贴视频链接（url）。
+    链接来源时服务器直接从链接读取原片并拆解，全程无需用户上传本地视频。
+    """
     cfg = load_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "尚未配置 API Key")
-    suffix = Path(file.filename or "video.mp4").suffix.lower()
-    if suffix not in {".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi"}:
-        raise HTTPException(400, "请上传 MP4、MOV、WebM、MKV 或 AVI 视频")
     tmpdir = tempfile.mkdtemp(prefix="vinsight_creative_")
-    video_path = os.path.join(tmpdir, "source" + suffix)
     audio_path = os.path.join(tmpdir, "track.mp3")
     token = uuid.uuid4().hex
     creative_slot = None
     try:
         total = 0
         video_digest = hashlib.md5()
-        with open(video_path, "wb") as output:
-            while True:
-                chunk = await file.read(1 << 20)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > min(MAX_VIDEO_BYTES, 300 * 1024 * 1024):
-                    raise HTTPException(413, "深度拆解视频暂限 300MB 以内")
-                video_digest.update(chunk)
-                output.write(chunk)
+        if url and url.strip() and file is None:
+            # 链接来源：服务器直接从链接读取原片，全程无需上传本地视频。
+            if len(url) > 4096:
+                raise HTTPException(400, "视频链接过长，请粘贴原始分享链接")
+            try:
+                _, title, vpath = await asyncio.to_thread(
+                    resolver.download_video, url.strip(), tmpdir, FFMPEG,
+                    cfg.get("xhs_cookie", ""),
+                )
+            except resolver.ResolveError as exc:
+                raise HTTPException(400, str(exc))
+            except Exception as exc:
+                raise HTTPException(400, f"视频下载失败：{exc}")
+            if not vpath or not os.path.isfile(vpath) or os.path.getsize(vpath) == 0:
+                raise HTTPException(400, "视频下载失败：未获取到有效文件，请稍后重试或改用上传")
+            if os.path.getsize(vpath) > min(MAX_VIDEO_BYTES, 300 * 1024 * 1024):
+                raise HTTPException(413, "深度拆解视频暂限 300MB 以内")
+            suffix = Path(vpath).suffix.lower() or ".mp4"
+            video_path = vpath
+            video_digest.update(("url:" + url.strip()).encode("utf-8"))
+        elif file is not None:
+            suffix = Path(file.filename or "video.mp4").suffix.lower()
+            if suffix not in {".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi"}:
+                raise HTTPException(400, "请上传 MP4、MOV、WebM、MKV 或 AVI 视频")
+            video_path = os.path.join(tmpdir, "source" + suffix)
+            with open(video_path, "wb") as output:
+                while True:
+                    chunk = await file.read(1 << 20)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > min(MAX_VIDEO_BYTES, 300 * 1024 * 1024):
+                        raise HTTPException(413, "深度拆解视频暂限 300MB 以内")
+                    video_digest.update(chunk)
+                    output.write(chunk)
+        else:
+            raise HTTPException(400, "请先上传视频文件或粘贴视频链接")
         duration = await asyncio.to_thread(get_duration, video_path)
         if not duration or duration <= 0:
             raise HTTPException(400, "无法读取视频，请转换为 MP4（H.264/AAC）后重试")
         if duration > 30 * 60:
             raise HTTPException(400, "电商二创深度拆解暂支持 30 分钟以内视频")
         srt_raw = await subtitle.read() if subtitle and subtitle.filename else b""
+        if not srt_raw and subtitle_text.strip():
+            srt_raw = subtitle_text.encode("utf-8")
         srt_segments = _parse_srt(srt_raw) if srt_raw else []
         # 同一视频（含相同字幕）在缓存期内直接复用拆解结果：
         # 省去 FFmpeg 全片拆镜 + 语音转写 + 剧情理解三段最重的耗时。
