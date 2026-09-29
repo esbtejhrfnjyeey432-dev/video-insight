@@ -3,8 +3,9 @@
 resolver.py · 通用视频链接解析下载（粘什么平台的链接都能试）
 架构（多级降级，尽量「粘什么都能解析」）：
   1. 抖音 / 小红书：自写解析器走移动端分享页（无需登录）
-  2. 通用平台（B站 / 微博 / 西瓜 / YouTube 等 1000+ 站点）：yt-dlp 引擎
-  3. 视频直链（以 .mp4 等结尾）：直接下载
+  2. B站：公开 API 专用快路径（避开云服务器访问播放页时的风控）
+  3. 通用平台（微博 / 西瓜 / YouTube 等 1000+ 站点）：yt-dlp 引擎
+  4. 视频直链（以 .mp4 等结尾）：直接下载
   每一级失败自动降级到下一级，全部失败时给出可操作的中文提示。
 """
 import glob
@@ -227,6 +228,109 @@ def _subtitle_from_info(info: dict, headers: dict) -> dict:
                     parsed.update({"language": language, "source": source_label})
                     return parsed
     return {"text": "", "segments": [], "language": "", "source": ""}
+
+
+def _is_bilibili_host(host: str) -> bool:
+    host = (host or "").split(":", 1)[0].rstrip(".").lower()
+    return host == "b23.tv" or host == "bilibili.com" or host.endswith(".bilibili.com")
+
+
+def _bilibili_bvid(url: str) -> tuple[str, str]:
+    """Return (BV id, canonical page URL), resolving b23 short links once."""
+    host = urlparse(url).netloc.lower()
+    page_url = url
+    if host == "b23.tv" or host.endswith(".b23.tv"):
+        try:
+            response = requests.get(url, headers={"User-Agent": DESKTOP_UA},
+                                    timeout=20, allow_redirects=True, stream=True)
+            page_url = response.url
+            response.close()
+        except requests.RequestException as exc:
+            raise ResolveError(f"B站短链接展开失败：{exc}")
+        if not _is_bilibili_host(urlparse(page_url).netloc):
+            raise ResolveError("B站短链接跳转到了非 B 站页面，已停止读取")
+    match = re.search(r"/(BV[0-9A-Za-z]{10,})", urlparse(page_url).path, re.I)
+    if not match:
+        match = re.search(r"\b(BV[0-9A-Za-z]{10,})\b", page_url, re.I)
+    if not match:
+        raise ResolveError("没有从 B站链接中识别到 BV 号，请复制具体视频播放页链接")
+    bvid = match.group(1)
+    return bvid, f"https://www.bilibili.com/video/{bvid}"
+
+
+def _bilibili_subtitle(bvid: str, cid: int, headers: dict) -> dict:
+    """Best-effort public subtitle lookup; lack of subtitles is not an error."""
+    empty = {"text": "", "segments": [], "language": "", "source": ""}
+    try:
+        response = requests.get("https://api.bilibili.com/x/player/v2",
+                                params={"bvid": bvid, "cid": cid},
+                                headers=headers, timeout=20)
+        data = response.json().get("data") or {}
+        tracks = ((data.get("subtitle") or {}).get("subtitles") or [])
+        preferred = sorted(tracks, key=lambda item: 0 if str(item.get("lan", "")).startswith("zh") else 1)
+        for track in preferred:
+            subtitle_url = str(track.get("subtitle_url") or "")
+            if subtitle_url.startswith("//"):
+                subtitle_url = "https:" + subtitle_url
+            if not subtitle_url.startswith("https://"):
+                continue
+            raw = requests.get(subtitle_url, headers=headers, timeout=20)
+            if raw.status_code != 200 or len(raw.content) > MAX_SUBTITLE_BYTES:
+                continue
+            body = raw.json().get("body") or []
+            segments = []
+            for item in body:
+                text = re.sub(r"\s+", " ", str(item.get("content") or "")).strip()
+                if not text:
+                    continue
+                start = max(0, int(float(item.get("from") or 0) * 1000))
+                end = max(start, int(float(item.get("to") or 0) * 1000))
+                segments.append({"start_ms": start, "end_ms": end, "text": text})
+            if segments:
+                return {"text": " ".join(x["text"] for x in segments)[:120000],
+                        "segments": segments[:5000], "language": track.get("lan") or "",
+                        "source": "B站字幕"}
+    except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return empty
+
+
+def resolve_bilibili_stream(url: str, include_subtitles: bool = False):
+    """Resolve public Bilibili video/audio as one progressive HTML5 MP4."""
+    bvid, page_url = _bilibili_bvid(url)
+    headers = {"User-Agent": DESKTOP_UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+               "Referer": page_url, "Origin": "https://www.bilibili.com"}
+    try:
+        meta_response = requests.get("https://api.bilibili.com/x/web-interface/view",
+                                     params={"bvid": bvid}, headers=headers, timeout=25)
+        meta = meta_response.json()
+        if meta_response.status_code != 200 or meta.get("code") != 0:
+            raise ResolveError(str(meta.get("message") or f"HTTP {meta_response.status_code}"))
+        video = meta.get("data") or {}
+        pages = video.get("pages") or []
+        page = pages[0] if pages else video
+        cid = int(page.get("cid") or 0)
+        duration = float(page.get("duration") or video.get("duration") or 0)
+        if not cid:
+            raise ResolveError("B站没有返回该视频的分P信息")
+        play_response = requests.get("https://api.bilibili.com/x/player/playurl",
+                                     params={"bvid": bvid, "cid": cid, "qn": 16,
+                                             "fnval": 0, "platform": "html5"},
+                                     headers=headers, timeout=25)
+        play = play_response.json()
+        if play_response.status_code != 200 or play.get("code") != 0:
+            raise ResolveError(str(play.get("message") or f"HTTP {play_response.status_code}"))
+        streams = ((play.get("data") or {}).get("durl") or [])
+        stream_url = str((streams[0] if streams else {}).get("url") or "")
+        if not stream_url:
+            raise ResolveError("B站没有返回可读取的视频流")
+        duration = duration or float((play.get("data") or {}).get("timelength") or 0) / 1000
+        result = ("B站", str(video.get("title") or "")[:80], stream_url, duration, headers)
+        return result + (_bilibili_subtitle(bvid, cid, headers),) if include_subtitles else result
+    except ResolveError:
+        raise
+    except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise ResolveError(f"B站公开接口暂时不可用：{exc}")
 
 
 def _save_stream(resp, dest: str):
@@ -686,6 +790,8 @@ def resolve_stream_info(text: str, outdir: str, include_subtitles: bool = False)
         raise ResolveError("没有在输入内容中找到链接")
     validate_public_url(url)
     host = urlparse(url).netloc.lower()
+    if _is_bilibili_host(host):
+        return resolve_bilibili_stream(url, include_subtitles)
     if "douyin.com" in host or "iesdouyin.com" in host:
         # 配置了站点 Cookie 时优先交给最新版 yt-dlp；没有 Cookie 才走下方
         # 专用分享页解析。Cookie 仅来自服务端环境变量，不接收访客输入。
@@ -829,6 +935,18 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: 
         raise ResolveError("当前版本不支持视频号链接，请改用本地视频上传")
     is_douyin = "douyin.com" in host or "iesdouyin.com" in host
     is_xhs = "xiaohongshu.com" in host or "xhslink.com" in host
+
+    if _is_bilibili_host(host):
+        platform, title, stream_url, _duration, headers = resolve_bilibili_stream(url)
+        dest = os.path.join(outdir, "bilibili.mp4")
+        try:
+            with requests.get(stream_url, stream=True, timeout=180, headers=headers) as response:
+                if response.status_code not in (200, 206):
+                    raise ResolveError(f"B站视频流读取失败（HTTP {response.status_code}）")
+                _save_stream(response, dest)
+            return platform, title, dest
+        except requests.RequestException as exc:
+            raise ResolveError(f"B站视频流下载失败：{exc}")
 
     # 1. 抖音：自写解析器（快路径）→ yt-dlp 兜底
     if is_douyin:
