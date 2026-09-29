@@ -1136,8 +1136,19 @@ $("btnGo").onclick = async function(){
   try{
     task = isUpload ? doAnalyzeFrames(await extractLocalFrames(currentFile), currentFile) : doAnalyze(fd, false);
   }catch(e){
-    stopProgress(false); $("btnGo").disabled = false;
-    showErr(friendlyError(e.message || "本地抽帧失败"), true); return;
+    if(isUpload && currentFile){
+      // 浏览器本地抽帧失败（如 HEVC/flv 无法解码）→ 降级：上传原视频，后端 ffmpeg 抽帧
+      var ffd = new FormData();
+      ffd.append("file", currentFile, currentFile.name);
+      ffd.append("mode", $("analysisMode").value);
+      ffd.append("scenario", selectedScenario());
+      startUploadPhase();
+      task = doAnalyze(ffd, true);
+      toast("浏览器无法直接解码该视频，已改用服务器解析");
+    } else {
+      stopProgress(false); $("btnGo").disabled = false;
+      showErr(friendlyError(e.message || "本地抽帧失败"), true); return;
+    }
   }
   task
     .then(function(res){
