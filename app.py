@@ -2880,6 +2880,10 @@ async def update_config(
 async def analyze(
     file: UploadFile | None = File(None),
     url: str = Form(None),
+    source_page: str = Form(""),
+    source_title: str = Form(""),
+    source_platform: str = Form(""),
+    source_duration: float = Form(0),
     mode: str = Form("standard"),
     scenario: str = Form("course"),
     _code: None = Depends(require_code),
@@ -2925,16 +2929,30 @@ async def analyze(
                 # 相同文件在缓存期内直接复用上次解析，省去抽帧 + 大模型推理
                 return _with_cache_meta(cached)
         elif url and url.strip():
-            cache_key = ("url:" + hashlib.md5(url.strip().encode("utf-8")).hexdigest()
+            cache_source = source_page.strip() or url.strip()
+            cache_key = ("url:" + hashlib.md5(cache_source.encode("utf-8")).hexdigest()
                          + ":" + mode_norm + ":" + scenario_norm)
             cached = _cache_get(cache_key)
             if cached is not None:
                 return _with_cache_meta(cached)
             remote_info = None
             try:
-                # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
-                remote_info = await asyncio.to_thread(
-                    resolver.resolve_stream_info, url.strip(), tmpdir, True)
+                parsed_host = resolver.urlparse(url.strip()).hostname or ""
+                if (source_platform == "B站" and source_page and source_duration > 0
+                        and (parsed_host == "bilivideo.com" or parsed_host.endswith(".bilivideo.com"))):
+                    resolver.validate_public_url(url.strip())
+                    if source_duration > 3 * 3600:
+                        raise resolver.ResolveError("视频时长不能超过 3 小时")
+                    remote_info = (
+                        "B站", source_title[:80], url.strip(), float(source_duration),
+                        {"User-Agent": resolver.DESKTOP_UA, "Referer": source_page.strip(),
+                         "Origin": "https://www.bilibili.com"},
+                        {"text": "", "segments": [], "language": "", "source": ""},
+                    )
+                else:
+                    # 长视频优先只解析媒体地址，再从远程稀疏抽帧，避免下载整段。
+                    remote_info = await asyncio.to_thread(
+                        resolver.resolve_stream_info, url.strip(), tmpdir, True)
                 platform, title, stream_url, duration, media_headers, platform_subtitle = remote_info
                 if duration <= 0:
                     duration = await asyncio.to_thread(

@@ -1051,6 +1051,33 @@ function doAnalyzeRequest(path, fd, isUpload){
 }
 function doAnalyze(fd, isUpload){ return doAnalyzeRequest("/api/analyze", fd, isUpload); }
 
+function biliJsonp(path, params){
+  return new Promise(function(resolve,reject){
+    var cb="__vi_bili_"+Date.now()+"_"+Math.random().toString(36).slice(2),script=document.createElement("script");
+    var timeout=setTimeout(function(){cleanup();reject(new Error("B站响应超时，请确认链接为公开视频"));},12000);
+    function cleanup(){clearTimeout(timeout);delete window[cb];if(script.parentNode)script.parentNode.removeChild(script);}
+    window[cb]=function(data){cleanup();if(!data||data.code!==0)reject(new Error((data&&data.message)||"B站未返回视频信息"));else resolve(data.data||{});};
+    params=Object.assign({},params,{callback:cb,jsonp:"jsonp"});
+    script.src="https://api.bilibili.com"+path+"?"+Object.keys(params).map(function(k){return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);}).join("&");
+    script.onerror=function(){cleanup();reject(new Error("当前浏览器无法连接 B站，请稍后重试"));};
+    document.head.appendChild(script);
+  });
+}
+async function resolveBilibiliInBrowser(text){
+  var match=String(text||"").match(/\b(BV[0-9A-Za-z]{10,})\b/i);
+  if(!match){
+    if(/b23\.tv/i.test(text))throw new Error("请先打开 B站短链接，再复制包含 BV 号的完整播放页链接");
+    return null;
+  }
+  var bvid=match[1],meta=await biliJsonp("/x/web-interface/view",{bvid:bvid});
+  var page=(meta.pages&&meta.pages[0])||meta,cid=page.cid,duration=Number(page.duration||meta.duration||0);
+  if(!cid||!duration)throw new Error("B站没有返回视频时长或分P信息");
+  var play=await biliJsonp("/x/player/playurl",{bvid:bvid,cid:cid,qn:16,fnval:0,platform:"html5"});
+  var stream=play.durl&&play.durl[0]&&play.durl[0].url;
+  if(!stream)throw new Error("B站没有返回可读取的视频地址");
+  return {url:stream,title:meta.title||"B站视频",duration:duration,page:"https://www.bilibili.com/video/"+bvid};
+}
+
 function showLinkFallback(message){
   var box = $("linkFallback");
   box.style.display = "block";
@@ -1077,11 +1104,23 @@ $("btnGo").onclick = async function(){
   } else {
     var u = $("urlInput").value.trim();
     if(!u){ toast("请先粘贴视频链接"); return; }
-    fd.append("url", u);
+    try{
+      var bili=await resolveBilibiliInBrowser(u);
+      if(bili){
+        fd.append("url",bili.url);fd.append("source_page",bili.page);
+        fd.append("source_title",bili.title);fd.append("source_platform","B站");
+        fd.append("source_duration",String(bili.duration));
+      }else fd.append("url",u);
+    }catch(e){showErr(e.message||"B站链接读取失败",true);return;}
     activeSourceType = "url"; activeSourceUrl = u; activeSourceName = "";
   }
   fd.append("mode", $("analysisMode").value);
   fd.append("scenario", selectedScenario());
+  // 新任务开始时立即收起上一条报告。解析失败后仍展示旧结果会让用户
+  // 误以为旧报告属于当前链接；历史报告仍保留在“最近任务”中，可随时恢复。
+  lastResult = null;
+  $("result").style.display = "none";
+  clearVideoPlayer();
   $("btnGo").disabled = true;
   if(isUpload){ startUploadPhase(); } else { startProgress(); }
   var task;
