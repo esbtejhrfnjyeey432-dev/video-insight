@@ -553,7 +553,27 @@ def resolve_xhs(url: str, dest: str, cookie: str = "") -> str:
         except Exception as exc:
             raise ResolveError(f"小红书解析失败：{type(exc).__name__}: {exc}")
 
-    # 无 Cookie 兜底：网页版 __INITIAL_STATE__（已失效，但保留错误信息明确）
+    # 无 Cookie 兜底 1：移动端 feed API（匿名设备签名，无需登录态）
+    try:
+        import xhs_api
+        card, _j = xhs_api.fetch_note(note_id, xsec_token)
+        if card is not None:
+            play_url, title, kind = xhs_api.extract_video(card)
+            if kind == "image":
+                raise ResolveError("这条小红书是图文笔记，不是视频，无法解析")
+            if play_url:
+                with s.get(play_url, stream=True, timeout=180,
+                           headers={"Referer": "https://www.xiaohongshu.com/"}) as r3:
+                    if r3.status_code != 200:
+                        raise ResolveError(f"小红书视频下载失败（HTTP {r3.status_code}）")
+                    _save_stream(r3, dest)
+                return title
+    except ResolveError:
+        raise
+    except Exception:
+        pass  # 匿名签名失败，继续走网页版兜底
+
+    # 无 Cookie 兜底 2：网页版 __INITIAL_STATE__（已失效，但保留错误信息明确）
     r2 = s.get(
         f"https://www.xiaohongshu.com/explore/{note_id}",
         headers={"Accept-Language": "zh-CN,zh;q=0.9"},
