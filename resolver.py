@@ -295,17 +295,37 @@ def _bilibili_subtitle(bvid: str, cid: int, headers: dict) -> dict:
     return empty
 
 
+def _bilibili_json_get(url: str, *, params: dict, headers: dict, timeout: int = 25):
+    """Fetch JSON normally, then retry with a browser TLS fingerprint on WAF HTML."""
+    first_error = ""
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=timeout)
+        if response.status_code == 200:
+            return response.json(), response.status_code
+        first_error = f"HTTP {response.status_code}"
+    except (requests.RequestException, ValueError, json.JSONDecodeError) as exc:
+        first_error = str(exc) or type(exc).__name__
+    try:
+        from curl_cffi import requests as curl_requests
+        response = curl_requests.get(url, params=params, headers=headers, timeout=timeout,
+                                     impersonate="chrome")
+        return response.json(), response.status_code
+    except Exception as exc:
+        detail = str(exc) or type(exc).__name__
+        raise ResolveError(f"B站接口被平台风控拦截（{first_error}；浏览器模式：{detail}）")
+
+
 def resolve_bilibili_stream(url: str, include_subtitles: bool = False):
     """Resolve public Bilibili video/audio as one progressive HTML5 MP4."""
     bvid, page_url = _bilibili_bvid(url)
     headers = {"User-Agent": DESKTOP_UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                "Referer": page_url, "Origin": "https://www.bilibili.com"}
     try:
-        meta_response = requests.get("https://api.bilibili.com/x/web-interface/view",
-                                     params={"bvid": bvid}, headers=headers, timeout=25)
-        meta = meta_response.json()
-        if meta_response.status_code != 200 or meta.get("code") != 0:
-            raise ResolveError(str(meta.get("message") or f"HTTP {meta_response.status_code}"))
+        meta, meta_status = _bilibili_json_get(
+            "https://api.bilibili.com/x/web-interface/view",
+            params={"bvid": bvid}, headers=headers)
+        if meta_status != 200 or meta.get("code") != 0:
+            raise ResolveError(str(meta.get("message") or f"HTTP {meta_status}"))
         video = meta.get("data") or {}
         pages = video.get("pages") or []
         page = pages[0] if pages else video
@@ -313,13 +333,12 @@ def resolve_bilibili_stream(url: str, include_subtitles: bool = False):
         duration = float(page.get("duration") or video.get("duration") or 0)
         if not cid:
             raise ResolveError("B站没有返回该视频的分P信息")
-        play_response = requests.get("https://api.bilibili.com/x/player/playurl",
-                                     params={"bvid": bvid, "cid": cid, "qn": 16,
-                                             "fnval": 0, "platform": "html5"},
-                                     headers=headers, timeout=25)
-        play = play_response.json()
-        if play_response.status_code != 200 or play.get("code") != 0:
-            raise ResolveError(str(play.get("message") or f"HTTP {play_response.status_code}"))
+        play, play_status = _bilibili_json_get(
+            "https://api.bilibili.com/x/player/playurl",
+            params={"bvid": bvid, "cid": cid, "qn": 16,
+                    "fnval": 0, "platform": "html5"}, headers=headers)
+        if play_status != 200 or play.get("code") != 0:
+            raise ResolveError(str(play.get("message") or f"HTTP {play_status}"))
         streams = ((play.get("data") or {}).get("durl") or [])
         stream_url = str((streams[0] if streams else {}).get("url") or "")
         if not stream_url:
