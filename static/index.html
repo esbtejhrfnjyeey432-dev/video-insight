@@ -1066,7 +1066,7 @@ function biliJsonp(path, params){
 async function resolveBilibiliInBrowser(text){
   var match=String(text||"").match(/\b(BV[0-9A-Za-z]{10,})\b/i);
   if(!match){
-    if(/b23\.tv/i.test(text))throw new Error("请先打开 B站短链接，再复制包含 BV 号的完整播放页链接");
+    // b23.tv 分享短链交给服务端展开；用户无需手动打开后再复制 BV 完整链接。
     return null;
   }
   var bvid=match[1],meta=await biliJsonp("/x/web-interface/view",{bvid:bvid});
