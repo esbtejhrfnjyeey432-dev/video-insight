@@ -663,7 +663,7 @@ def _has_curl_cffi() -> bool:
 # 只有这些站点实测需要 TLS 伪装：Dailymotion 缺伪装会直接报
 # "attempting impersonation"，YouTube/Vimeo 在数据中心 IP 上被严格风控。
 # 反过来，B站开了伪装反而拿不到 formats（实测 3/3 → 0/3），所以必须按站点开关。
-IMPERSONATE_HOSTS = ("dailymotion", "dai.ly", "youtube", "youtu.be", "vimeo")
+IMPERSONATE_HOSTS = ("dailymotion", "dai.ly", "youtube", "youtu.be", "vimeo", "bilibili")
 
 
 def _impersonate_target(host: str):
@@ -957,16 +957,18 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: 
     is_xhs = "xiaohongshu.com" in host or "xhslink.com" in host
 
     if _is_bilibili_host(host):
-        platform, title, stream_url, _duration, headers = resolve_bilibili_stream(url)
-        dest = os.path.join(outdir, "bilibili.mp4")
         try:
+            platform, title, stream_url, _duration, headers = resolve_bilibili_stream(url)
+            dest = os.path.join(outdir, "bilibili.mp4")
             with requests.get(stream_url, stream=True, timeout=180, headers=headers) as response:
                 if response.status_code not in (200, 206):
                     raise ResolveError(f"B站视频流读取失败（HTTP {response.status_code}）")
                 _save_stream(response, dest)
             return platform, title, dest
-        except requests.RequestException as exc:
-            raise ResolveError(f"B站视频流下载失败：{exc}")
+        except (ResolveError, requests.RequestException):
+            # yt-dlp 兜底：自带 wbi 签名 + chrome TLS 伪装，绕过数据中心 IP 风控
+            title, path = resolve_ytdlp(url, outdir, ffmpeg_path)
+            return "B站", title, path
 
     # 1. 抖音：自写解析器（快路径）→ yt-dlp 兜底
     if is_douyin:
