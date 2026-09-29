@@ -89,6 +89,7 @@ def _prepare_cookies(url: str, outdir: str):
     jar: dict = {}
     manual = os.environ.get("VI_BILI_COOKIE", "").strip()
     if manual:
+        manual = manual.replace("Cookie:", "").replace("cookie:", "").strip().strip('"').strip("'")
         for part in manual.split(";"):
             if "=" in part:
                 k, v = part.split("=", 1)
@@ -323,6 +324,9 @@ def resolve_bilibili_stream(url: str, include_subtitles: bool = False):
     # 配置了登录 Cookie 时带上，绕过海外 IP 的地区限制（code 10004001）
     manual_cookie = os.environ.get("VI_BILI_COOKIE", "").strip()
     if manual_cookie:
+        # 容错：去掉用户复制时可能带上的 "Cookie:" 前缀或引号
+        manual_cookie = (manual_cookie.replace("Cookie:", "").replace("cookie:", "")
+                         .strip().strip('"').strip("'"))
         headers["Cookie"] = manual_cookie
     try:
         meta, meta_status = _bilibili_json_get(
