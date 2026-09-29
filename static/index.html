@@ -295,7 +295,7 @@
       <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
     <div class="urlrow" id="urlRow">
-      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音 / 小红书">
+      <input type="text" id="urlInput" placeholder="粘贴视频链接或分享文案：B站 / 抖音">
     </div>
     <div class="analysis-options">
       <div>
@@ -323,7 +323,7 @@
       </div>
     </div>
     <div id="urlHint" style="display:none;font-size:14px;line-height:1.8;color:var(--muted);margin-top:10px">
-      B站、抖音和小红书链接都可能受到平台登录、内容权限及风控策略影响，部分链接可能无法由云服务器读取。<br>
+      B站、抖音链接都可能受到平台登录、内容权限及风控策略影响，部分链接可能无法由云服务器读取。<br>
       如果链接暂时无法读取，可将视频保存到设备后使用“上传视频”继续分析。
     </div>
     <div class="actions">
@@ -471,11 +471,6 @@
     <div class="field" id="modelField">
       <label>视频理解模型</label>
       <select id="modelSelect"></select>
-    </div>
-    <div class="field">
-      <label>小红书登录凭证（仅本地私有部署可选）</label>
-      <textarea id="xhsCookie" rows="4" placeholder="仅在你自己电脑上运行本工具时使用。公开网站不会要求访客填写登录凭证。"></textarea>
-      <div class="hint" style="margin-top:6px">登录凭证可能失效，也可能被他人用来冒用你的登录状态；请勿填入不可信的网站或发给他人。</div>
     </div>
     <div class="btns">
       <button id="btnCancel">取消</button>
@@ -1808,7 +1803,6 @@ $("btnSave").onclick = function(){
   var fd = new FormData();
   fd.append("api_key", $("keyInput").value.trim());
   fd.append("model", $("modelSelect").value);
-  fd.append("xhs_cookie", $("xhsCookie").value.trim());
   api("/api/config", { method:"POST", body: fd })
     .then(function(r){ return r.json(); })
     .then(function(j){
@@ -1816,7 +1810,7 @@ $("btnSave").onclick = function(){
         $("mask").style.display = "none";
         $("noKeyBanner").style.display = "none";
         $("keyInput").value = "";
-        toast(j.has_xhs_cookie ? "已保存（含小红书 Cookie）" : "设置已保存");
+        toast("设置已保存");
       } else if(j.detail){
         toast(j.detail);
       }
