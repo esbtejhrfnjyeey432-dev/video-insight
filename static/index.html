@@ -1059,6 +1059,7 @@ function biliJsonp(path, params, attempt){
     window[cb]=function(data){cleanup();if(!data||data.code!==0)reject(new Error((data&&data.message)||"B站未返回视频信息"));else resolve(data.data||{});};
     params=Object.assign({},params,{callback:cb,jsonp:"jsonp"});
     script.src="https://api.bilibili.com"+path+"?"+Object.keys(params).map(function(k){return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);}).join("&");
+    script.referrerPolicy="no-referrer";
     script.onerror=function(){
       cleanup();
       if(attempt<1){ biliJsonp(path,params,attempt+1).then(resolve,reject); }
@@ -1067,26 +1068,15 @@ function biliJsonp(path, params, attempt){
     document.head.appendChild(script);
   });
 }
-function expandB23InBrowser(text){
-  var m=String(text||"").match(/https?:\/\/b23\.tv\/[A-Za-z0-9]+/i);
-  if(!m)return Promise.resolve(null);
-  return fetch(m[0],{mode:"no-cors",redirect:"follow",cache:"no-cache"})
-    .then(function(r){ var bv=(r.url||"").match(/BV[0-9A-Za-z]{10,}/i); return bv?bv[0]:null; })
-    .catch(function(){ return null; });
-}
 async function resolveBilibiliInBrowser(text){
   var match=String(text||"").match(/\b(BV[0-9A-Za-z]{10,})\b/i);
   if(!match){
     if(!/b23\.tv/i.test(text))return null;
-    var bv=await expandB23InBrowser(text);
-    if(bv){ match=[bv,bv]; }
-    else{
-      var fd=new FormData();fd.append("text",text);
-      var expanded=await api("/api/expand-bilibili",{method:"POST",body:fd});
-      var payload={};try{payload=await expanded.json();}catch(ignore){}
-      if(!expanded.ok||!payload.bvid)throw new Error(payload.detail||"B站短链接展开失败，请重新复制分享链接");
-      match=[payload.bvid,payload.bvid];
-    }
+    var fd=new FormData();fd.append("text",text);
+    var expanded=await api("/api/expand-bilibili",{method:"POST",body:fd});
+    var payload={};try{payload=await expanded.json();}catch(ignore){}
+    if(!expanded.ok||!payload.bvid)throw new Error(payload.detail||"B站短链接展开失败，请重新复制分享链接");
+    match=[payload.bvid,payload.bvid];
   }
   var bvid=match[1],meta=await biliJsonp("/x/web-interface/view",{bvid:bvid});
   var page=(meta.pages&&meta.pages[0])||meta,cid=page.cid,duration=Number(page.duration||meta.duration||0);
