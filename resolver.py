@@ -320,6 +320,10 @@ def resolve_bilibili_stream(url: str, include_subtitles: bool = False):
     bvid, page_url = _bilibili_bvid(url)
     headers = {"User-Agent": DESKTOP_UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                "Referer": page_url, "Origin": "https://www.bilibili.com"}
+    # 配置了登录 Cookie 时带上，绕过海外 IP 的地区限制（code 10004001）
+    manual_cookie = os.environ.get("VI_BILI_COOKIE", "").strip()
+    if manual_cookie:
+        headers["Cookie"] = manual_cookie
     try:
         meta, meta_status = _bilibili_json_get(
             "https://api.bilibili.com/x/web-interface/view",
