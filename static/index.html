@@ -1115,7 +1115,7 @@ $("btnGo").onclick = async function(){
         fd.append("source_title",bili.title);fd.append("source_platform","B站");
         fd.append("source_duration",String(bili.duration));
       }else fd.append("url",u);
-    }catch(e){showErr(e.message||"B站链接读取失败",true);return;}
+    }catch(e){ fd.append("url",u); } // 浏览器侧解析失败，降级到服务器解析（平台风控时可能仍失败）
     activeSourceType = "url"; activeSourceUrl = u; activeSourceName = "";
   }
   fd.append("mode", $("analysisMode").value);
@@ -1362,13 +1362,24 @@ $("btnDeconstruct").onclick = function(){
   var btn = this;
   /* 链接来源：服务器直接从链接读取原片并拆解，全程无需上传本地视频。 */
   if(activeSourceType === "url" && activeSourceUrl){
-    var fd = new FormData(); fd.append("url", activeSourceUrl);
-    if(lastResult)fd.append("analysis",JSON.stringify(lastResult));
+    var fd = new FormData();
     var subFile = $("subtitleFile").files[0];
     btn.disabled = true; btn.textContent = "正在理解…";
     $("deconstructStatus").textContent = "正在从视频链接直接读取原片并拆解（无需上传视频，大视频约需 2~8 分钟，请勿刷新页面）…";
     var ready = subFile ? subFile.text().then(function(t){ if(t)fd.append("subtitle_text", t); }) : Promise.resolve();
-    ready.then(function(){
+    /* B站链接：优先在浏览器里解析出直链再传给服务器，绕开数据中心 IP 被 B站风控的问题。 */
+    var resolveDone = Promise.resolve().then(function(){
+      return resolveBilibiliInBrowser(activeSourceUrl).catch(function(){ return null; });
+    }).then(function(bili){
+      if(bili){
+        fd.append("url", bili.url); fd.append("source_page", bili.page);
+        fd.append("source_platform", "B站"); fd.append("source_duration", String(bili.duration));
+      } else {
+        fd.append("url", activeSourceUrl);
+      }
+      if(lastResult)fd.append("analysis",JSON.stringify(lastResult));
+    });
+    Promise.all([resolveDone, ready]).then(function(){
       api("/api/creative/deconstruct", {method:"POST", body:fd})
         .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.detail||"拆解失败"); return j; }); })
         .then(function(j){ creativeWorkspace.deconstruction = j; renderDeconstruction(j); toast(j.warning ? ("部分识别未完成：" + j.warning) : "原片拆解完成"); })

@@ -1974,6 +1974,9 @@ async def creative_deconstruct(
     file: UploadFile | None = File(None),
     subtitle: UploadFile | None = File(None),
     url: str = Form(""),
+    source_page: str = Form(""),
+    source_platform: str = Form(""),
+    source_duration: float = Form(0),
     subtitle_text: str = Form(""),
     analysis: str = Form(""),
     _code: None = Depends(require_code),
@@ -1998,11 +2001,40 @@ async def creative_deconstruct(
             # 链接来源：服务器直接从链接读取原片，全程无需上传本地视频。
             if len(url) > 4096:
                 raise HTTPException(400, "视频链接过长，请粘贴原始分享链接")
+            parsed_host = (resolver.urlparse(url.strip()).hostname or "").lower()
+            is_bili_direct = (source_platform == "B站" and source_page
+                              and (parsed_host == "bilivideo.com"
+                                   or parsed_host.endswith(".bilivideo.com")))
             try:
-                _, title, vpath = await asyncio.to_thread(
-                    resolver.download_video, url.strip(), tmpdir, FFMPEG,
-                    cfg.get("xhs_cookie", ""),
-                )
+                if is_bili_direct:
+                    # 浏览器已解析出 B 站直链：直接用直链下载，绕开数据中心 IP
+                    # 访问 B 站 API 被风控（HTTP 412）的问题。
+                    dest = os.path.join(tmpdir, "bilibili.mp4")
+                    headers = {"User-Agent": resolver.DESKTOP_UA,
+                               "Referer": source_page.strip(),
+                               "Origin": "https://www.bilibili.com"}
+                    try:
+                        with requests.get(url.strip(), headers=headers, stream=True,
+                                          timeout=(20, 180)) as resp:
+                            if resp.status_code not in (200, 206):
+                                raise resolver.ResolveError(
+                                    f"B站视频流读取失败（HTTP {resp.status_code}）")
+                            got = 0
+                            with open(dest, "wb") as f:
+                                for chunk in resp.iter_content(1024 * 512):
+                                    f.write(chunk)
+                                    got += len(chunk)
+                                    if got > min(MAX_VIDEO_BYTES, 300 * 1024 * 1024):
+                                        raise resolver.ResolveError("视频超过 300MB，无法深度拆解")
+                    except requests.RequestException as exc:
+                        raise resolver.ResolveError(f"B站视频流下载失败：{exc}")
+                    title = ""
+                    vpath = dest
+                else:
+                    _, title, vpath = await asyncio.to_thread(
+                        resolver.download_video, url.strip(), tmpdir, FFMPEG,
+                        cfg.get("xhs_cookie", ""),
+                    )
             except resolver.ResolveError as exc:
                 raise HTTPException(400, str(exc))
             except Exception as exc:
