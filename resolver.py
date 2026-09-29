@@ -982,7 +982,8 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: 
                 return "抖音", title, path
             except ResolveError:
                 raise ResolveError(
-                    f"{exc}。抖音近期风控较严，最稳妥的方式：在抖音 App 里下载视频，再用「上传文件」解析"
+                    f"{exc}。抖音对服务器 IP 风控极严（会触发验证码），可尝试在服务器配置抖音 Cookie（环境变量 VI_DOUYIN_COOKIE），"
+                    "或最稳妥地在抖音 App 里下载视频后用「上传文件」解析"
                 )
 
     # 2. 小红书：登录 Cookie + xys 签名（有 Cookie）→ yt-dlp 兜底

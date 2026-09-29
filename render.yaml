@@ -21,6 +21,10 @@ services:
       # 敏感值，在 Render 网页填写；过期后需重新登录小红书复制最新 Cookie。
       - key: VI_XHS_COOKIE
         sync: false
+      # 抖音 Cookie（可选）：抖音对服务器 IP 风控最严，配 Cookie 也需 yt-dlp 生成
+      # msToken，成功率仍有限；敏感值，在 Render 网页填写。
+      - key: VI_DOUYIN_COOKIE
+        sync: false
       # 公开模式：任何人打开链接即可直接使用，无需访问码
       - key: VI_PUBLIC
         value: "true"
