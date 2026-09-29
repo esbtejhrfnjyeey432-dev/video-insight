@@ -3027,6 +3027,31 @@ async def analyze(
         analysis_slots.release()
 
 
+@app.post("/api/expand-bilibili")
+async def expand_bilibili(
+    text: str = Form(...),
+    _code: None = Depends(require_code),
+):
+    """Expand a copied Bilibili share text/short URL without fetching video APIs.
+
+    Render's data-center IP can be blocked by Bilibili's playback API, while a
+    simple b23 redirect still works. The browser uses the returned BV id for the
+    public metadata/playback JSONP requests from the user's own network.
+    """
+    url = resolver.extract_url(text)
+    if not url:
+        raise HTTPException(400, "没有在分享内容中找到 B站链接")
+    host = (resolver.urlparse(url).hostname or "").lower()
+    if not resolver._is_bilibili_host(host):
+        raise HTTPException(400, "这不是 B站视频链接")
+    try:
+        resolver.validate_public_url(url)
+        bvid, page = await asyncio.to_thread(resolver._bilibili_bvid, url)
+        return {"ok": True, "bvid": bvid, "page": page}
+    except resolver.ResolveError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post("/api/analyze-frames")
 async def analyze_frames(
     frames: list[UploadFile] = File(...),

@@ -1066,8 +1066,12 @@ function biliJsonp(path, params){
 async function resolveBilibiliInBrowser(text){
   var match=String(text||"").match(/\b(BV[0-9A-Za-z]{10,})\b/i);
   if(!match){
-    // b23.tv 分享短链交给服务端展开；用户无需手动打开后再复制 BV 完整链接。
-    return null;
+    if(!/b23\.tv/i.test(text))return null;
+    var fd=new FormData();fd.append("text",text);
+    var expanded=await api("/api/expand-bilibili",{method:"POST",body:fd});
+    var payload={};try{payload=await expanded.json();}catch(ignore){}
+    if(!expanded.ok||!payload.bvid)throw new Error(payload.detail||"B站短链接展开失败，请重新复制分享链接");
+    match=[payload.bvid,payload.bvid];
   }
   var bvid=match[1],meta=await biliJsonp("/x/web-interface/view",{bvid:bvid});
   var page=(meta.pages&&meta.pages[0])||meta,cid=page.cid,duration=Number(page.duration||meta.duration||0);
