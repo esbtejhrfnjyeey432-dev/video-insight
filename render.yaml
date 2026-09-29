@@ -17,6 +17,10 @@ services:
         value: "3.11.9"
       - key: VI_API_KEY
         sync: false              # 敏感值：部署时在 Render 网页填写（阿里百炼 Key）
+      # B站登录 Cookie：Render 部署在新加坡(海外IP)，B站对海外数据中心IP返回地区限制
+      # (code 10004001)/风控(412)。配置登录 Cookie 后可绕过。敏感值，在 Render 网页填写。
+      - key: VI_BILI_COOKIE
+        sync: false
       # 小红书登录 Cookie（2025 起小红书强制登录态，无 Cookie 无法解析）。
       # 敏感值，在 Render 网页填写；过期后需重新登录小红书复制最新 Cookie。
       - key: VI_XHS_COOKIE
