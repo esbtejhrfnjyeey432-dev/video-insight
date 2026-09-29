@@ -1046,27 +1046,47 @@ function doAnalyzeRequest(path, fd, isUpload){
 }
 function doAnalyze(fd, isUpload){ return doAnalyzeRequest("/api/analyze", fd, isUpload); }
 
-function biliJsonp(path, params){
+function biliJsonp(path, params, attempt){
+  attempt = attempt || 0;
   return new Promise(function(resolve,reject){
     var cb="__vi_bili_"+Date.now()+"_"+Math.random().toString(36).slice(2),script=document.createElement("script");
-    var timeout=setTimeout(function(){cleanup();reject(new Error("B站响应超时，请确认链接为公开视频"));},12000);
+    var timeout=setTimeout(function(){
+      cleanup();
+      if(attempt<1){ biliJsonp(path,params,attempt+1).then(resolve,reject); }
+      else reject(new Error("B站响应超时，请确认链接为公开视频"));
+    },15000);
     function cleanup(){clearTimeout(timeout);delete window[cb];if(script.parentNode)script.parentNode.removeChild(script);}
     window[cb]=function(data){cleanup();if(!data||data.code!==0)reject(new Error((data&&data.message)||"B站未返回视频信息"));else resolve(data.data||{});};
     params=Object.assign({},params,{callback:cb,jsonp:"jsonp"});
     script.src="https://api.bilibili.com"+path+"?"+Object.keys(params).map(function(k){return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);}).join("&");
-    script.onerror=function(){cleanup();reject(new Error("当前浏览器无法连接 B站，请稍后重试"));};
+    script.onerror=function(){
+      cleanup();
+      if(attempt<1){ biliJsonp(path,params,attempt+1).then(resolve,reject); }
+      else reject(new Error("当前浏览器无法连接 B站，请稍后重试"));
+    };
     document.head.appendChild(script);
   });
+}
+function expandB23InBrowser(text){
+  var m=String(text||"").match(/https?:\/\/b23\.tv\/[A-Za-z0-9]+/i);
+  if(!m)return Promise.resolve(null);
+  return fetch(m[0],{mode:"no-cors",redirect:"follow",cache:"no-cache"})
+    .then(function(r){ var bv=(r.url||"").match(/BV[0-9A-Za-z]{10,}/i); return bv?bv[0]:null; })
+    .catch(function(){ return null; });
 }
 async function resolveBilibiliInBrowser(text){
   var match=String(text||"").match(/\b(BV[0-9A-Za-z]{10,})\b/i);
   if(!match){
     if(!/b23\.tv/i.test(text))return null;
-    var fd=new FormData();fd.append("text",text);
-    var expanded=await api("/api/expand-bilibili",{method:"POST",body:fd});
-    var payload={};try{payload=await expanded.json();}catch(ignore){}
-    if(!expanded.ok||!payload.bvid)throw new Error(payload.detail||"B站短链接展开失败，请重新复制分享链接");
-    match=[payload.bvid,payload.bvid];
+    var bv=await expandB23InBrowser(text);
+    if(bv){ match=[bv,bv]; }
+    else{
+      var fd=new FormData();fd.append("text",text);
+      var expanded=await api("/api/expand-bilibili",{method:"POST",body:fd});
+      var payload={};try{payload=await expanded.json();}catch(ignore){}
+      if(!expanded.ok||!payload.bvid)throw new Error(payload.detail||"B站短链接展开失败，请重新复制分享链接");
+      match=[payload.bvid,payload.bvid];
+    }
   }
   var bvid=match[1],meta=await biliJsonp("/x/web-interface/view",{bvid:bvid});
   var page=(meta.pages&&meta.pages[0])||meta,cid=page.cid,duration=Number(page.duration||meta.duration||0);
