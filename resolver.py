@@ -553,27 +553,8 @@ def resolve_xhs(url: str, dest: str, cookie: str = "") -> str:
         except Exception as exc:
             raise ResolveError(f"小红书解析失败：{type(exc).__name__}: {exc}")
 
-    # 无 Cookie 兜底 1：移动端 feed API（匿名设备签名，无需登录态）
-    try:
-        import xhs_api
-        card, _j = xhs_api.fetch_note(note_id, xsec_token)
-        if card is not None:
-            play_url, title, kind = xhs_api.extract_video(card)
-            if kind == "image":
-                raise ResolveError("这条小红书是图文笔记，不是视频，无法解析")
-            if play_url:
-                with s.get(play_url, stream=True, timeout=180,
-                           headers={"Referer": "https://www.xiaohongshu.com/"}) as r3:
-                    if r3.status_code != 200:
-                        raise ResolveError(f"小红书视频下载失败（HTTP {r3.status_code}）")
-                    _save_stream(r3, dest)
-                return title
-    except ResolveError:
-        raise
-    except Exception:
-        pass  # 匿名签名失败，继续走网页版兜底
-
-    # 无 Cookie 兜底 2：网页版 __INITIAL_STATE__（已失效，但保留错误信息明确）
+    # 无 Cookie：小红书 2025 起强制登录态（新版 mnsv2 签名依赖登录 Cookie 的 a1，
+    # 旧版匿名签名一律 406），仅保留网页版 __INITIAL_STATE__ 作为最后兜底。
     r2 = s.get(
         f"https://www.xiaohongshu.com/explore/{note_id}",
         headers={"Accept-Language": "zh-CN,zh;q=0.9"},
@@ -603,9 +584,9 @@ def resolve_xhs(url: str, dest: str, cookie: str = "") -> str:
             play_url = None
     if not play_url:
         raise ResolveError(
-            "该小红书链接需要平台登录权限，公开服务器无法直接读取。"
-            "请通过平台允许的方式将视频保存到设备，再使用「上传视频」进行分析；"
-            "公开版不会收集账号密码或登录 Cookie。")
+            "小红书视频需要登录 Cookie 才能解析（2025 年起平台强制登录态）。"
+            "请管理员在服务器配置小红书登录 Cookie（环境变量 VI_XHS_COOKIE），"
+            "或将视频保存到设备后用「上传视频」分析。")
 
     with s.get(play_url, stream=True, timeout=180,
                headers={"Referer": "https://www.xiaohongshu.com/"}) as r3:
@@ -1011,16 +992,16 @@ def download_video(text: str, outdir: str, ffmpeg_path: str = None, xhs_cookie: 
             title = resolve_xhs(url, dest, cookie=xhs_cookie)
             return "小红书", title, dest
         except ResolveError as exc:
-            if "超过" in str(exc) or "图文" in str(exc):
+            if "超过" in str(exc) or "图文" in str(exc) or "需要登录" in str(exc):
                 raise
             try:
                 title, path = resolve_ytdlp(url, outdir, ffmpeg_path)
                 return "小红书", title, path
             except ResolveError:
                 raise ResolveError(
-                    "该小红书链接需要平台登录权限，公开服务器无法直接读取。"
-                    "请通过平台允许的方式将视频保存到设备，再使用「上传视频」进行分析；"
-                    "公开版不会收集账号密码或登录 Cookie。"
+                    "小红书视频需要登录 Cookie 才能解析（2025 年起平台强制登录态）。"
+                    "请管理员在服务器配置小红书登录 Cookie（环境变量 VI_XHS_COOKIE），"
+                    "或将视频保存到设备后用「上传视频」分析。"
                 )
 
     # 2.5 Vimeo：自研播放器解析 → yt-dlp 兜底
