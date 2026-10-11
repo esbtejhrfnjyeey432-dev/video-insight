@@ -12,12 +12,16 @@ import glob
 import html
 import ipaddress
 import json
+import logging
 import os
 import re
+import shutil
 import socket
 from urllib.parse import unquote, urlparse
 
 import requests
+
+logger = logging.getLogger("video-insight.resolver")
 
 MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) "
@@ -414,6 +418,105 @@ def _find_douyin_item(node):
     return None
 
 
+def _resolve_douyin_browser(video_id: str, dest: str) -> str:
+    """用无登录临时浏览器完成抖音访客校验，并截获页面自己的公开媒体流。"""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise ResolveError("抖音已启用浏览器校验，但服务器未安装浏览器解析组件")
+
+    detail_items: list[dict] = []
+    media_urls: list[str] = []
+    title = ""
+    cookies = []
+    executable = (os.environ.get("VI_CHROMIUM_PATH", "").strip()
+                  or shutil.which("chromium") or shutil.which("chromium-browser"))
+    if os.name == "nt" and not executable:
+        for candidate in (
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ):
+            if os.path.isfile(candidate):
+                executable = candidate
+                break
+
+    try:
+        with sync_playwright() as pw:
+            launch_options = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required"],
+            }
+            if executable:
+                launch_options["executable_path"] = executable
+            browser = pw.chromium.launch(**launch_options)
+            context = browser.new_context(
+                user_agent=DESKTOP_UA, locale="zh-CN",
+                viewport={"width": 1280, "height": 800},
+            )
+            page = context.new_page()
+
+            def capture(response):
+                try:
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "/aweme/v1/web/aweme/detail/" in response.url and response.status == 200:
+                        item = _find_douyin_item(response.json())
+                        if item:
+                            detail_items.append(item)
+                    if (content_type.startswith("video/") or ".mp4" in response.url
+                            or "/video/tos/" in response.url):
+                        media_urls.append(response.url)
+                except Exception:
+                    pass
+
+            page.on("response", capture)
+            page.goto(f"https://www.douyin.com/video/{video_id}",
+                      wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(12_000)
+            title = page.title()[:80]
+            try:
+                for index in range(min(3, page.locator("video").count())):
+                    src = page.locator("video").nth(index).get_attribute("src")
+                    if src and not src.startswith("blob:"):
+                        media_urls.append(src)
+            except Exception:
+                pass
+            cookies = context.cookies()
+            browser.close()
+    except Exception as exc:
+        logger.warning("douyin_browser_failed type=%s", type(exc).__name__)
+        raise ResolveError("抖音浏览器校验未通过，请稍后重新尝试")
+
+    if detail_items:
+        item = detail_items[-1]
+        title = (item.get("desc") or title)[:80]
+        play_addr = item.get("video", {}).get("play_addr", {}) or {}
+        uri = play_addr.get("uri")
+        if uri:
+            media_urls.insert(0, f"https://aweme.snssdk.com/aweme/v1/play/?video_id={uri}&ratio=360p&line=0")
+        media_urls.extend(play_addr.get("url_list") or [])
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": DESKTOP_UA,
+                            "Referer": f"https://www.douyin.com/video/{video_id}"})
+    for cookie in cookies:
+        try:
+            session.cookies.set(cookie["name"], cookie["value"],
+                                domain=cookie.get("domain"), path=cookie.get("path", "/"))
+        except Exception:
+            pass
+    for media_url in dict.fromkeys(media_urls):
+        try:
+            with session.get(media_url, stream=True, timeout=180) as response:
+                if response.status_code != 200:
+                    continue
+                _save_stream(response, dest)
+                return title
+        except Exception:
+            continue
+    raise ResolveError("抖音页面已打开，但没有取得可下载的公开视频流")
+
+
 def resolve_douyin(url: str, dest: str) -> str:
     """走移动端分享页解析（无需登录）。返回视频标题（可能为空）。"""
     s = requests.Session()
@@ -475,7 +578,7 @@ def resolve_douyin(url: str, dest: str) -> str:
         except Exception:
             item = None
     if not item:
-        raise ResolveError("抖音页面解析失败：该视频可能已删除或平台接口更新")
+        return _resolve_douyin_browser(vid, dest)
 
     title = (item.get("desc") or "")[:80]
     play_addr = item.get("video", {}).get("play_addr", {}) or {}
