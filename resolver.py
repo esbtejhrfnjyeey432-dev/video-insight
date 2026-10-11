@@ -17,11 +17,14 @@ import os
 import re
 import shutil
 import socket
+import threading
 from urllib.parse import unquote, urlparse
 
 import requests
 
 logger = logging.getLogger("video-insight.resolver")
+_DOUYIN_BROWSER_LOCK = threading.Lock()
+_DOUYIN_GUEST_COOKIES: list[dict] = []
 
 MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) "
@@ -420,6 +423,7 @@ def _find_douyin_item(node):
 
 def _resolve_douyin_browser(video_id: str, dest: str) -> str:
     """用无登录临时浏览器完成抖音访客校验，并截获页面自己的公开媒体流。"""
+    global _DOUYIN_GUEST_COOKIES
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -442,6 +446,7 @@ def _resolve_douyin_browser(video_id: str, dest: str) -> str:
                 break
 
     try:
+        _DOUYIN_BROWSER_LOCK.acquire()
         with sync_playwright() as pw:
             launch_options = {
                 "headless": True,
@@ -458,6 +463,8 @@ def _resolve_douyin_browser(video_id: str, dest: str) -> str:
             # 会被抖音的前端风控直接识别为自动化请求。
             context = browser.new_context(locale="zh-CN",
                                           viewport={"width": 1280, "height": 800})
+            if _DOUYIN_GUEST_COOKIES:
+                context.add_cookies(_DOUYIN_GUEST_COOKIES)
             page = context.new_page()
             page.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -493,10 +500,14 @@ def _resolve_douyin_browser(video_id: str, dest: str) -> str:
             except Exception:
                 pass
             cookies = context.cookies()
+            _DOUYIN_GUEST_COOKIES = cookies
             browser.close()
     except Exception as exc:
         logger.warning("douyin_browser_failed type=%s", type(exc).__name__)
         raise ResolveError("抖音浏览器校验未通过，请稍后重新尝试")
+    finally:
+        if _DOUYIN_BROWSER_LOCK.locked():
+            _DOUYIN_BROWSER_LOCK.release()
 
     if detail_items:
         item = detail_items[-1]
