@@ -9,7 +9,7 @@ services:
     runtime: python
     plan: free
     region: singapore            # 新加坡节点，访问国内视频平台延迟较低
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /api/ready
     envVars:
