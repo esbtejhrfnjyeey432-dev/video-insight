@@ -1631,8 +1631,24 @@ function startGridGeneration(button,board,refs){
 }
 $("btnStoryboard").onclick=function(){syncWorkbenchScript();var btn=this;callWorkbench("storyboard",btn).then(function(j){clearCreativeDownstream("storyboard");creativeWorkspace.storyboard=j.storyboard||[];renderStoryboard(creativeWorkspace.storyboard);toast("分镜已按脚本时间顺序生成");}).catch(function(){fallbackStoryboard();});};
 function renderVideoPrompts(rows){
-  $("promptOutput").innerHTML='<div class="prompt-list">'+(rows||[]).map(function(x,i){var range=(x.time?x.time+" · ":"")+(x.source_groups&&x.source_groups.length?"仅使用分镜组 "+x.source_groups.join("、"):"镜头 "+(x.start_shot||"")+"–"+(x.end_shot||""));var voiceBadge=x.voice_status==="ready"?'<span class="voice-badge ok">人物音频已具备</span>':'<span class="voice-badge warn" title="不影响脚本、分镜和画面生成；可在成片阶段上传配音或后期配音">未上传真人音频 · 可后期配音</span>';return '<div class="prompt-card"><div class="prompt-card-head"><span class="prompt-num">'+(x.group||i+1)+'</span><div class="prompt-head-main"><h4>第 '+esc(x.group||i+1)+' 组 · '+esc(x.duration)+' 秒</h4><div class="prompt-range">'+esc(range)+'</div></div>'+voiceBadge+'</div><p class="agent-text">'+esc(x.prompt||"")+'</p></div>';}).join("")+'</div>';
+  $("promptOutput").innerHTML='<div class="prompt-list">'+(rows||[]).map(function(x,i){var range=(x.time?x.time+" · ":"")+(x.source_groups&&x.source_groups.length?"仅使用分镜组 "+x.source_groups.join("、"):"镜头 "+(x.start_shot||"")+"–"+(x.end_shot||""));var voiceBadge=x.voice_status==="ready"?'<span class="voice-badge ok">人物音频已具备</span>':'<span class="voice-badge warn" title="不影响脚本、分镜和画面生成；可在成片阶段上传配音或后期配音">未上传真人音频 · 可后期配音</span>';return '<div class="prompt-card"><div class="prompt-card-head"><span class="prompt-num">'+(x.group||i+1)+'</span><div class="prompt-head-main"><h4>第 '+esc(x.group||i+1)+' 组 · '+esc(x.duration)+' 秒</h4><div class="prompt-range">'+esc(range)+'</div></div>'+voiceBadge+'</div><p class="agent-text">'+esc(x.prompt||"")+'</p><button class="primary" data-wan-index="'+i+'">用 Wan 3.0 生成 5 秒视频</button><div class="tip" id="wanStatus'+i+'"></div></div>';}).join("")+'</div>';
+  Array.from($("promptOutput").querySelectorAll("[data-wan-index]")).forEach(function(button){button.onclick=function(){createWanClip(Number(button.getAttribute("data-wan-index")),button);};});
   $("promptPanel").style.display="block";setWorkbenchStep(5);$("promptPanel").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function createWanClip(index,button){
+  var row=creativeWorkspace.prompts[index]||{},status=$("wanStatus"+index);button.disabled=true;button.textContent="正在提交…";
+  api("/api/creative/video",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:row.prompt||"",resolution:"480P",ratio:"adaptive",duration:5})})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"提交失败");return j;});})
+    .then(function(j){status.textContent="任务已提交，正在生成…";pollWanClip(j.task_id,index,button,0);})
+    .catch(function(e){button.disabled=false;button.textContent="用 Wan 3.0 生成 5 秒视频";status.textContent=e.message||"提交失败";});
+}
+function pollWanClip(taskId,index,button,count){
+  var status=$("wanStatus"+index);if(count>120){button.disabled=false;button.textContent="重新查询/生成";status.textContent="生成时间较长，请稍后重试";return;}
+  setTimeout(function(){api("/api/creative/video/"+encodeURIComponent(taskId)).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.detail||"查询失败");return j;});}).then(function(j){
+    if(j.status==="SUCCEEDED"&&j.video_url){button.style.display="none";status.innerHTML='<a href="'+esc(j.video_url)+'" target="_blank" rel="noopener">查看/下载本组生成视频</a>';return;}
+    if(j.status==="FAILED"||j.status==="CANCELED"){throw new Error("视频生成失败，请调整提示词后重试");}
+    status.textContent="Wan 3.0 生成中（"+esc(j.status||"RUNNING")+"）…";pollWanClip(taskId,index,button,count+1);
+  }).catch(function(e){button.disabled=false;button.textContent="用 Wan 3.0 生成 5 秒视频";status.textContent=e.message||"查询失败";});},5000);
 }
 $("btnVideoPrompts").onclick=function(){var btn=this;callWorkbench("prompts",btn).then(function(j){creativeWorkspace.prompts=j.video_prompts||[];renderVideoPrompts(creativeWorkspace.prompts);toast("视频提示词包已生成");}).catch(function(){fallbackPrompts();});};
 function syncReportFromDom(){

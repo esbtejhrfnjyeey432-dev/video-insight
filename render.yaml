@@ -44,6 +44,17 @@ services:
         value: "6"
       - key: VI_FRAME_WIDTH
         value: "640"
+      # 使用当前推荐的原生视觉语言模型；不要再使用已下线的 qwen-vl-*。
+      - key: VI_FAST_VISION_MODEL
+        value: "qwen3.8-flash"
+      - key: VI_QUALITY_VISION_MODEL
+        value: "qwen3.8-max"
+      - key: VI_AGENT_MODEL
+        value: "qwen3.8-flash"
+      - key: VI_VIDEO_MODEL
+        value: "wan3.0-video"
+      - key: VI_VIDEO_API_URL
+        value: "https://ws-qdyopc5r3g0n8brb.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
       - key: VI_MAX_VIDEO_MB
         value: "200"
       # 并发分池：本地上传与帧解析走轻量池（4 路并行），互不阻塞；
@@ -80,7 +91,7 @@ services:
       - key: VI_PAYMENT_AUTO_REVIEW
         value: "true"
       - key: VI_PAYMENT_REVIEW_MODEL
-        value: "qwen3-vl-plus"
+        value: "qwen3.8-flash"
       # 生产环境关闭内部解析诊断接口，避免被滥用为下载器或网络探针
       - key: VI_ENABLE_DEBUG
         value: "false"

@@ -117,7 +117,7 @@ PAYMENT_REQUIRE_DURABLE = os.environ.get(
 PAYMENT_ADMIN_TOKEN = os.environ.get("VI_PAYMENT_ADMIN_TOKEN", "").strip()
 PAYMENT_AUTO_REVIEW = os.environ.get("VI_PAYMENT_AUTO_REVIEW", "true").strip().lower() in \
     ("1", "true", "yes", "on")
-PAYMENT_REVIEW_MODEL = os.environ.get("VI_PAYMENT_REVIEW_MODEL", "qwen3-vl-plus").strip()
+PAYMENT_REVIEW_MODEL = os.environ.get("VI_PAYMENT_REVIEW_MODEL", "qwen3.8-flash").strip()
 SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
 PAYMENT_ADMIN_URL = os.environ.get(
     "VI_PAYMENT_ADMIN_URL", "https://video-insight-9q9i.onrender.com/payment-admin.html").strip()
@@ -358,12 +358,25 @@ IMAGE_API_URL = os.environ.get("VI_IMAGE_API_URL", "https://dashscope.aliyuncs.c
 IMAGE_MODEL = os.environ.get("VI_IMAGE_MODEL", "qwen-image-3.0").strip()
 ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
 ASR_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+VIDEO_API_URL = os.environ.get(
+    "VI_VIDEO_API_URL",
+    "https://ws-qdyopc5r3g0n8brb.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+).strip()
+VIDEO_MODEL = os.environ.get("VI_VIDEO_MODEL", "wan3.0-video").strip()
 ASR_MODEL = os.environ.get(
     "VI_ASR_MODEL", "qwen-audio-3.0-asr-flash-filetrans").strip()
-DEFAULT_MODEL = "qwen3-vl-plus"
-FAST_VISION_MODEL = os.environ.get("VI_FAST_VISION_MODEL", "qwen-vl-plus").strip()
-AGENT_MODEL = os.environ.get("VI_AGENT_MODEL", "qwen-plus").strip()
-MODEL_OPTIONS = ["qwen3-vl-plus", "qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest"]
+DEFAULT_MODEL = os.environ.get("VI_QUALITY_VISION_MODEL", "qwen3.8-max").strip()
+FAST_VISION_MODEL = os.environ.get("VI_FAST_VISION_MODEL", "qwen3.8-flash").strip()
+AGENT_MODEL = os.environ.get("VI_AGENT_MODEL", "qwen3.8-flash").strip()
+MODEL_OPTIONS = ["qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3.7-flash"]
+LEGACY_MODEL_REPLACEMENTS = {
+    "qwen-vl-plus": "qwen3.8-flash",
+    "qwen-vl-plus-latest": "qwen3.8-flash",
+    "qwen-vl-max": "qwen3.8-max",
+    "qwen-vl-max-latest": "qwen3.8-max",
+    "qwen3-vl-flash": "qwen3.8-flash",
+    "qwen3-vl-plus": "qwen3.8-max",
+}
 # 抽帧数量/宽度可用环境变量下调（云平台免费层内存小，建议 6 帧 / 640px）
 MAX_FRAMES = int(os.environ.get("VI_MAX_FRAMES", "12"))
 # 帧数硬上限：抽帧越多 AI 推理越慢。6 帧已能均匀覆盖全片关键画面，
@@ -468,6 +481,11 @@ def load_config() -> dict:
     env_xhs = os.environ.get("VI_XHS_COOKIE", "").strip()
     if env_xhs:
         cfg["xhs_cookie"] = env_xhs
+    # 已下线/旧版视觉模型可能仍残留在本地 config.json 中；读取时自动迁移，
+    # 避免升级代码后深度模式继续请求旧模型。
+    configured_model = str(cfg.get("model") or "").strip()
+    if configured_model in LEGACY_MODEL_REPLACEMENTS:
+        cfg["model"] = LEGACY_MODEL_REPLACEMENTS[configured_model]
     return cfg
 
 
@@ -1629,6 +1647,62 @@ def call_qwen_text_json(prompt: str, cfg: dict, temperature: float = 0.2,
     raise last_err
 
 
+def submit_wan_video(prompt: str, cfg: dict, resolution: str = "480P",
+                     ratio: str = "adaptive", duration: int = 5) -> dict:
+    """提交 Wan 异步文生视频任务；API Key 始终只在服务端使用。"""
+    clean_prompt = str(prompt or "").strip()
+    if not clean_prompt:
+        raise HTTPException(400, "视频提示词不能为空")
+    if len(clean_prompt) > 5000:
+        raise HTTPException(400, "视频提示词过长，请控制在 5000 字以内")
+    resolution = resolution if resolution in {"480P", "720P", "1080P"} else "480P"
+    ratio = ratio if ratio in {"adaptive", "16:9", "9:16", "1:1"} else "adaptive"
+    duration = duration if duration in {5, 10} else 5
+    try:
+        response = requests.post(
+            VIDEO_API_URL,
+            headers={"X-DashScope-Async": "enable",
+                     "Authorization": "Bearer " + cfg["api_key"],
+                     "Content-Type": "application/json"},
+            json={"model": VIDEO_MODEL, "input": {"prompt": clean_prompt},
+                  "parameters": {"resolution": resolution, "ratio": ratio,
+                                 "duration": duration}},
+            timeout=45,
+        )
+    except Exception as exc:
+        logger.warning("video_submit_failed type=%s", type(exc).__name__)
+        raise HTTPException(502, "视频生成服务暂时不可用，请稍后重试")
+    if response.status_code not in {200, 201, 202}:
+        logger.warning("video_submit_response_failed status=%s", response.status_code)
+        raise HTTPException(502, f"视频生成服务返回异常（HTTP {response.status_code}）")
+    task_id = str((response.json().get("output") or {}).get("task_id") or "")
+    if not task_id:
+        raise HTTPException(502, "视频生成服务未返回任务编号")
+    return {"task_id": task_id, "status": "PENDING", "model": VIDEO_MODEL}
+
+
+def get_wan_video_task(task_id: str, cfg: dict) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", str(task_id or "")):
+        raise HTTPException(400, "视频任务编号无效")
+    task_url = VIDEO_API_URL.split("/api/v1/", 1)[0] + "/api/v1/tasks/" + task_id
+    try:
+        response = requests.get(task_url,
+                                headers={"Authorization": "Bearer " + cfg["api_key"]},
+                                timeout=30)
+    except Exception as exc:
+        logger.warning("video_task_failed type=%s", type(exc).__name__)
+        raise HTTPException(502, "查询视频生成进度失败，请稍后重试")
+    if response.status_code != 200:
+        logger.warning("video_task_response_failed status=%s", response.status_code)
+        raise HTTPException(502, f"查询视频进度返回异常（HTTP {response.status_code}）")
+    output = response.json().get("output") or {}
+    status = str(output.get("task_status") or "UNKNOWN")
+    video_url = str(output.get("video_url") or
+                    ((output.get("results") or [{}])[0].get("url")
+                     if isinstance(output.get("results"), list) and output.get("results") else ""))
+    return {"task_id": task_id, "status": status, "video_url": video_url}
+
+
 AGENT_TOOLS = ("creative_pack", "course_pack")
 
 
@@ -2280,6 +2354,30 @@ async def creative_workbench(
         final_result = _validate_creative_phase(phase, repaired, expected)
     _cache_put(cache_key, final_result)
     return final_result
+
+
+@app.post("/api/creative/video")
+async def creative_video(payload: dict = Body(...),
+                         _code: None = Depends(require_code)):
+    """把工作台提示词提交给 Wan 3.0，返回异步任务编号。"""
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置阿里百炼 API Key")
+    return await asyncio.to_thread(
+        submit_wan_video, payload.get("prompt"), cfg,
+        str(payload.get("resolution") or "480P"),
+        str(payload.get("ratio") or "adaptive"),
+        int(payload.get("duration") or 5),
+    )
+
+
+@app.get("/api/creative/video/{task_id}")
+async def creative_video_status(task_id: str,
+                                _code: None = Depends(require_code)):
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "尚未配置阿里百炼 API Key")
+    return await asyncio.to_thread(get_wan_video_task, task_id, cfg)
 
 
 @app.post("/api/creative/storyboard-grid/quote")
