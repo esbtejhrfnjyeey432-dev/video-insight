@@ -369,6 +369,7 @@ DEFAULT_MODEL = os.environ.get("VI_QUALITY_VISION_MODEL", "qwen3.8-max").strip()
 FAST_VISION_MODEL = os.environ.get("VI_FAST_VISION_MODEL", "qwen3.8-flash").strip()
 AGENT_MODEL = os.environ.get("VI_AGENT_MODEL", "qwen3.8-flash").strip()
 MODEL_OPTIONS = ["qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3.7-flash"]
+VISION_MODEL_FALLBACKS = ["qwen3.8-flash", "qwen3.7-plus", "qwen3.7-flash"]
 LEGACY_MODEL_REPLACEMENTS = {
     "qwen-vl-plus": "qwen3.8-flash",
     "qwen-vl-plus-latest": "qwen3.8-flash",
@@ -1440,6 +1441,28 @@ def _analysis_model(cfg: dict, mode: str) -> str:
         cfg.get("model") or DEFAULT_MODEL)
 
 
+def _analysis_model_candidates(cfg: dict, mode: str) -> list[str]:
+    """主模型不可用或无权限时，按当前通用视觉模型顺序自动降级。"""
+    candidates = [_analysis_model(cfg, mode), *VISION_MODEL_FALLBACKS]
+    return list(dict.fromkeys(model for model in candidates if model))
+
+
+def _is_model_unavailable_response(response) -> bool:
+    """只识别模型下线/无权限类错误，普通参数错误仍直接返回，避免盲目重试。"""
+    try:
+        payload = response.json()
+        detail = " ".join(str(payload.get(key) or "")
+                          for key in ("code", "message", "error"))
+    except Exception:
+        detail = str(getattr(response, "text", "") or "")
+    detail = detail.lower()
+    markers = ("model.notexist", "model not exist", "model_not_found",
+               "unsupported model", "model is not supported", "model has been",
+               "no access to model", "permission denied for model",
+               "模型不存在", "模型已下线", "无权访问该模型")
+    return response.status_code in {400, 403, 404} and any(x in detail for x in markers)
+
+
 def _ensure_overall_summary(result: dict) -> dict:
     """Fill a missing summary strictly from facts already present in the report."""
     if str(result.get("overall_summary") or "").strip():
@@ -1540,7 +1563,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
         )
     mode, context_note = _analysis_context(mode)
     scenario, scenario_note = _scenario_context(scenario)
-    model = _analysis_model(cfg, mode)
+    models = _analysis_model_candidates(cfg, mode)
     transcript_note = ""
     if transcript:
         transcript_note = (
@@ -1551,7 +1574,7 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
     for f in frames:
         content.append({"type": "image_url", "image_url": {"url": f}})
     body = {
-        "model": model,
+        "model": models[0],
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.3,
         "max_tokens": 2048 if mode in {"quick", "standard"} else 3072,
@@ -1559,44 +1582,56 @@ def call_qwen(frames: list, cfg: dict, duration: float | None = None,
         "response_format": {"type": "json_object"},
     }
     last_err: HTTPException | None = None
-    for attempt in range(3):  # 模型偶发返回非 JSON，自动重试
-        try:
-            r = requests.post(
-                API_URL,
-                headers={
-                    "Authorization": "Bearer " + cfg["api_key"],
-                    "Content-Type": "application/json",
-                },
-                json=body, timeout=120 if mode in {"quick", "standard"} else 240,
-            )
-        except Exception as exc:
-            logger.warning("model_request_failed attempt=%s type=%s", attempt + 1,
-                           type(exc).__name__)
-            if attempt < 2:
-                time.sleep(_model_retry_delay(None, attempt))
-                continue
-            raise HTTPException(502, "大模型服务暂时不可用，请稍后重试")
-        if r.status_code != 200:
-            # Never reflect a provider response body: it may contain internal
-            # request metadata and is not suitable for public clients or logs.
-            logger.warning("model_response_failed attempt=%s status=%s",
-                           attempt + 1, r.status_code)
-            if r.status_code in RETRYABLE_MODEL_STATUS and attempt < 2:
-                time.sleep(_model_retry_delay(r, attempt))
-                continue
-            raise HTTPException(502, f"大模型服务返回异常（HTTP {r.status_code}），请稍后重试")
-        msg = r.json()["choices"][0]["message"]
-        # content 为空时兜底取 reasoning_content；并剥离思考标签
-        text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
-        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        try:
-            # 模型偶尔会漏掉末尾总结；仅用同轮已提取事实补齐，不补造内容。
-            return _ensure_overall_summary(parse_model_json(text))
-        except HTTPException as exc:
-            last_err = exc
-            if attempt < 2:
-                time.sleep(0.25 * (attempt + 1))
-    raise last_err
+    for model_index, model in enumerate(models):
+        body["model"] = model
+        for attempt in range(3):  # 模型偶发返回非 JSON，自动重试
+            try:
+                r = requests.post(
+                    API_URL,
+                    headers={
+                        "Authorization": "Bearer " + cfg["api_key"],
+                        "Content-Type": "application/json",
+                    },
+                    json=body, timeout=120 if mode in {"quick", "standard"} else 240,
+                )
+            except Exception as exc:
+                logger.warning("model_request_failed attempt=%s type=%s", attempt + 1,
+                               type(exc).__name__)
+                if attempt < 2:
+                    time.sleep(_model_retry_delay(None, attempt))
+                    continue
+                raise HTTPException(502, "大模型服务暂时不可用，请稍后重试")
+            if r.status_code != 200:
+                # Never reflect a provider response body: it may contain internal
+                # request metadata and is not suitable for public clients or logs.
+                logger.warning("model_response_failed attempt=%s status=%s",
+                               attempt + 1, r.status_code)
+                if _is_model_unavailable_response(r) and model_index + 1 < len(models):
+                    logger.warning("vision_model_unavailable model=%s fallback=%s",
+                                   model, models[model_index + 1])
+                    break
+                if r.status_code in RETRYABLE_MODEL_STATUS and attempt < 2:
+                    time.sleep(_model_retry_delay(r, attempt))
+                    continue
+                raise HTTPException(502, f"大模型服务返回异常（HTTP {r.status_code}），请稍后重试")
+            msg = r.json()["choices"][0]["message"]
+            # content 为空时兜底取 reasoning_content；并剥离思考标签
+            text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            try:
+                # 模型偶尔会漏掉末尾总结；仅用同轮已提取事实补齐，不补造内容。
+                result = _ensure_overall_summary(parse_model_json(text))
+                result["_provider_model"] = model
+                return result
+            except HTTPException as exc:
+                last_err = exc
+                if attempt < 2:
+                    time.sleep(0.25 * (attempt + 1))
+        else:
+            continue
+        # 仅模型不可用时由 break 到达这里，继续尝试下一个候选模型。
+        continue
+    raise last_err or HTTPException(502, "当前视觉模型暂时不可用，请稍后重试")
 
 
 def call_qwen_text_json(prompt: str, cfg: dict, temperature: float = 0.2,
@@ -3139,10 +3174,11 @@ async def analyze(
         scenario, _ = _scenario_context(scenario)
         analysis = await asyncio.to_thread(
             call_qwen, frames, cfg, duration, mode, transcript, scenario)
+        provider_model = analysis.pop("_provider_model", _analysis_model(cfg, mode))
         analysis["_meta"] = {
             "frames": len(frames),
             "duration": int(duration),
-            "model": _analysis_model(cfg, mode),
+            "model": provider_model,
             "platform": platform,
             "title": title,
             "mode": mode,
@@ -3239,10 +3275,11 @@ async def analyze_frames(
         charge_daily_cost(_analysis_cost_estimate(mode, False))
         analysis = await asyncio.to_thread(
             call_qwen, encoded, cfg, duration, mode, "", scenario)
+        provider_model = analysis.pop("_provider_model", _analysis_model(cfg, mode))
         analysis["_meta"] = {
             "frames": len(encoded),
             "duration": int(duration),
-            "model": _analysis_model(cfg, mode),
+            "model": provider_model,
             "platform": "本地文件（浏览器抽帧）",
             "title": Path(filename).name[:120],
             "mode": mode,
