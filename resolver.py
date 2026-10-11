@@ -445,16 +445,22 @@ def _resolve_douyin_browser(video_id: str, dest: str) -> str:
         with sync_playwright() as pw:
             launch_options = {
                 "headless": True,
-                "args": ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required"],
+                "args": [
+                    "--no-sandbox", "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                    "--autoplay-policy=no-user-gesture-required",
+                ],
             }
             if executable:
                 launch_options["executable_path"] = executable
             browser = pw.chromium.launch(**launch_options)
-            context = browser.new_context(
-                user_agent=DESKTOP_UA, locale="zh-CN",
-                viewport={"width": 1280, "height": 800},
-            )
+            # 保留 Chromium 自己的真实版本标识；硬编码 UA 与浏览器版本不一致
+            # 会被抖音的前端风控直接识别为自动化请求。
+            context = browser.new_context(locale="zh-CN",
+                                          viewport={"width": 1280, "height": 800})
             page = context.new_page()
+            page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             def capture(response):
                 try:
@@ -470,9 +476,14 @@ def _resolve_douyin_browser(video_id: str, dest: str) -> str:
                     pass
 
             page.on("response", capture)
-            page.goto(f"https://www.douyin.com/video/{video_id}",
-                      wait_until="domcontentloaded", timeout=60_000)
-            page.wait_for_timeout(12_000)
+            try:
+                page.goto(f"https://www.douyin.com/video/{video_id}",
+                          wait_until="commit", timeout=60_000)
+            except Exception:
+                # 抖音常用中断当前导航再跳转的方式种访客标识；只要页面仍存活，
+                # 后续网络监听依然可以拿到详情或媒体流。
+                pass
+            page.wait_for_timeout(15_000)
             title = page.title()[:80]
             try:
                 for index in range(min(3, page.locator("video").count())):
